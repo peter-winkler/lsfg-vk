@@ -51,6 +51,10 @@ namespace lsfgvk::layer {
         /// return the amount of generated frames
         /// @return generated frames count
         [[nodiscard]] uint64_t count() const { return this->destinationImages.size(); }
+
+        /// return the extent of the exchanged images
+        /// @return image extent
+        [[nodiscard]] VkExtent2D sourceExtent() const { return this->sourceImages.front().getExtent(); }
     private:
         ls::R<backend::Instance> instance;
         ls::R<const vk::Vulkan> vk;

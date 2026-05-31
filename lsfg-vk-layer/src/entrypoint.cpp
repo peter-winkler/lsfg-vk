@@ -32,6 +32,11 @@ namespace {
         PFN_vkGetDeviceProcAddr GetDeviceProcAddr;
         PFN_vkQueueSubmit QueueSubmit;
 
+        // single graphics queue shared between the game and the offload thread;
+        // every submit to it must hold sharedQueueMutex (see hooks/device.cpp)
+        VkQueue sharedQueue{};
+        std::mutex* sharedQueueMutex{};
+
         MyVkLayer layer; // managed instances
         std::unordered_map<VkInstance, std::unique_ptr<MyVkInstance>> instances;
         std::unordered_map<VkDevice, std::unique_ptr<MyVkDevice>> devices;
@@ -187,7 +192,11 @@ namespace {
                     return *device;
                 }
             );
-            layer_info->devices.emplace(*device, std::move(myvk_device));
+            auto& dev = *layer_info->devices.emplace(
+                *device, std::move(myvk_device)).first->second;
+            layer_info->QueueSubmit = dev.funcs().QueueSubmit;
+            layer_info->sharedQueue = dev.offload().queue;
+            layer_info->sharedQueueMutex = &dev.offload().mutex;
 
             return VK_SUCCESS;
         } catch (const ls::vulkan_error& e) {
@@ -390,6 +399,17 @@ namespace {
         return it->second->WaitForPresent2KHR(info);
     }
 
+    // The offload thread shares the game's single graphics queue, so the game's own
+    // submits to that queue must be serialized against ours via sharedQueueMutex.
+    VkResult myvkQueueSubmit(VkQueue queue, uint32_t submitCount,
+            const VkSubmitInfo* pSubmits, VkFence fence) {
+        if (layer_info->sharedQueueMutex && queue == layer_info->sharedQueue) {
+            const std::scoped_lock<std::mutex> lock(*layer_info->sharedQueueMutex);
+            return layer_info->QueueSubmit(queue, submitCount, pSubmits, fence);
+        }
+        return layer_info->QueueSubmit(queue, submitCount, pSubmits, fence);
+    }
+
     VkResult myvkQueuePresentKHR(VkQueue queue,
             const VkPresentInfoKHR* info) {
         VkResult result = VK_SUCCESS;
@@ -521,7 +541,13 @@ namespace {
             .signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size()),
             .pSignalSemaphores = signalSemaphores.data()
         };
-        auto res = layer_info->QueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+        VkResult res = VK_SUCCESS;
+        {
+            std::unique_lock<std::mutex> lock;
+            if (layer_info->sharedQueueMutex && queue == layer_info->sharedQueue)
+                lock = std::unique_lock<std::mutex>(*layer_info->sharedQueueMutex);
+            res = layer_info->QueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+        }
         if (res != VK_SUCCESS) {
             std::cerr << "lsfg-vk: something went wrong during lsfg-vk present submission:\n"
                 "- vkQueueSubmit() failed with error " << res << '\n';
@@ -586,6 +612,7 @@ VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVers
                 { "vkReleaseSwapchainImagesEXT", VKPTR(myvkReleaseSwapchainImagesKHR) },
                 { "vkWaitForPresentKHR", VKPTR(myvkWaitForPresentKHR) },
                 { "vkWaitForPresent2KHR", VKPTR(myvkWaitForPresent2KHR) },
+                { "vkQueueSubmit", VKPTR(myvkQueueSubmit) },
                 { "vkQueuePresentKHR", VKPTR(myvkQueuePresentKHR) },
                 { "vkDestroySwapchainKHR", VKPTR(myvkDestroySwapchainKHR) }
 #undef VKPTR

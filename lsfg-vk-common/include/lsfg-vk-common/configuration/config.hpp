@@ -21,7 +21,9 @@ namespace ls {
     /// pacing methods
     enum class Pacing {
         /// do not perform any pacing (vsync+novrr)
-        None
+        None,
+        /// space generated frames evenly using the CPU clock
+        CPU
     };
 
     /// game profile configuration

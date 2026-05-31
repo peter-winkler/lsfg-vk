@@ -46,6 +46,24 @@ namespace {
 
         return images;
     }
+
+    /// current time in microseconds (CLOCK_MONOTONIC)
+    uint64_t nowInUs() noexcept {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+
+        return static_cast<uint64_t>(ts.tv_sec) * 1'000'000
+            + static_cast<uint64_t>(ts.tv_nsec) / 1'000;
+    }
+
+    /// sleep until an absolute CLOCK_MONOTONIC time (microseconds)
+    void sleepUntilUs(uint64_t targetUs) noexcept {
+        const timespec ts{
+            .tv_sec = static_cast<time_t>(targetUs / 1'000'000),
+            .tv_nsec = static_cast<long>((targetUs % 1'000'000) * 1'000)
+        };
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, nullptr);
+    }
 }
 
 MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevice& device,
@@ -86,7 +104,9 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
         );
     }
 
-    // create thread
+    // create the frame generation driver, then the offload thread that drives it
+    this->generator.emplace(layer, device, info.imageExtent, info.imageFormat);
+
     this->doneSemaphore.emplace(vk, 0);
     this->thread = std::thread(&MyVkSwapchain::thread_main, this);
 
@@ -122,6 +142,8 @@ std::pair<VkSemaphore, uint64_t> MyVkSwapchain::sync() {
 void MyVkSwapchain::thread_main() noexcept {
     const auto& vk = this->device.get().vkd();
     auto& offload = this->device.get().offload();
+    auto& gen = this->generator.mut();
+    const uint64_t genCount = gen.count();
 
     struct Pass {
         vk::Semaphore acquireSemaphore;
@@ -131,8 +153,9 @@ void MyVkSwapchain::thread_main() noexcept {
     };
 
     std::vector<Pass> passes;
-    passes.reserve(this->swapchainImages.size() + 1);
-    for (size_t i = 0; i < this->swapchainImages.size() + 1; i++) {
+    const size_t passCount = this->swapchainImages.size() + genCount + 2;
+    passes.reserve(passCount);
+    for (size_t i = 0; i < passCount; i++) {
         passes.emplace_back(Pass {
             .acquireSemaphore = vk::Semaphore(vk),
             .commandBuffer = vk::CommandBuffer(vk),
@@ -141,82 +164,150 @@ void MyVkSwapchain::thread_main() noexcept {
         });
     }
 
-    try { // FIXME: indentation and stuff
+    uint64_t passIdx{0};
 
-    uint64_t counter{1};
-    while (this->running.load()) {
-        // wait for present signal and fetch the image index
-        const auto ppi = this->virtual_FetchUPresent(100'1000, counter);
-        if (!ppi.has_value())
-            continue; // timeout after 100us
-
-        // acquire a real swapchain image
-        const auto& pass = passes[counter % passes.size()];
+    // acquire a real swapchain image, record a blit onto it (recordBlit returns the
+    // timeline semaphore + value the blit must wait on, or {VK_NULL_HANDLE, 0}),
+    // present it linked to the original present, then block until the copy completes
+    const auto present = [&](const auto& recordBlit, const MyVkPresentInfo& linked,
+            uint64_t targetUs) {
+        auto& pass = passes[passIdx++ % passes.size()];
         const uint32_t real_idx = this->virtual_AcquireNext(pass.acquireSemaphore);
-
-        // copy virtual image into real swapchain image
-        const auto& cmdbuf = pass.commandBuffer;
-        cmdbuf.begin(vk);
-
-        auto& virtualImage = this->images.at(ppi->idx);
         auto& swapchainImage = this->swapchainImages.at(real_idx);
 
-        cmdbuf.blitImage(vk,
-            {
-                {
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .srcAccessMask = VK_ACCESS_NONE,
-                    .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    FILL_BARRIER(virtualImage.handle())
-                },
-                {
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .srcAccessMask = VK_ACCESS_NONE,
-                    .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    FILL_BARRIER(swapchainImage)
-                },
-            },
-            { virtualImage.handle(), swapchainImage },
-            virtualImage.getExtent(),
-            {
-                {
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                    .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    FILL_BARRIER(swapchainImage)
-                }
-            }
-        );
-
+        auto& cmdbuf = pass.commandBuffer;
+        cmdbuf.begin(vk);
+        const auto [waitSem, waitVal] = recordBlit(cmdbuf, swapchainImage);
         cmdbuf.end(vk);
 
         {
             const std::scoped_lock<std::mutex> lock(offload.mutex);
             cmdbuf.submit(vk,
-                { pass.acquireSemaphore.handle() }, VK_NULL_HANDLE, 0,
+                { pass.acquireSemaphore.handle() }, waitSem, waitVal,
                 { pass.presentSemaphore.handle() }, VK_NULL_HANDLE, 0,
                 pass.copyFence.handle(), offload.queue
             );
         }
 
-        // present the real swapchain image
-        this->virtual_PresentLinked(*ppi, pass.presentSemaphore, real_idx);
+        // pace the present: the copy above overlaps with the sleep
+        if (targetUs)
+            sleepUntilUs(targetUs);
+        this->virtual_PresentLinked(linked, pass.presentSemaphore, real_idx);
 
-        // wait for the copy to finish
         if (!pass.copyFence.wait(vk, UINT64_MAX))
             throw ls::error("virtual swapchain copy fence wait timed out");
         pass.copyFence.reset(vk);
+    };
 
-        // mark image as available again
-        this->virtual_CompleteUPresent(*ppi);
-    }
+    // blit recorder for the real (game-rendered) frame: virtual image -> real image
+    const auto recordRealFrame = [&](VkImage virtualImage)
+            -> std::function<std::pair<VkSemaphore, uint64_t>(vk::CommandBuffer&, VkImage)> {
+        return [&vk, virtualImage, &gen](vk::CommandBuffer& cmdbuf, VkImage swapchainImage)
+                -> std::pair<VkSemaphore, uint64_t> {
+            cmdbuf.blitImage(vk,
+                {
+                    {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .srcAccessMask = VK_ACCESS_NONE,
+                        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        FILL_BARRIER(virtualImage)
+                    },
+                    {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .srcAccessMask = VK_ACCESS_NONE,
+                        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        FILL_BARRIER(swapchainImage)
+                    },
+                },
+                { virtualImage, swapchainImage },
+                gen.sourceExtent(),
+                {
+                    {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                        .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                        FILL_BARRIER(swapchainImage)
+                    }
+                }
+            );
+            return { VK_NULL_HANDLE, 0 };
+        };
+    };
 
+    const bool pace = this->layer.get().profile().pacing == ls::Pacing::CPU;
+    double intervalUs{0};       // smoothed game-frame interval
+    uint64_t lastArrivalUs{0};  // previous game present timestamp
+    uint64_t nextUs{0};         // running present anchor for CPU pacing
+
+    try {
+        uint64_t counter{1};
+        while (this->running.load()) {
+            // wait for the next rendered frame
+            const auto ppi = this->virtual_FetchUPresent(100'1000, counter);
+            if (!ppi.has_value())
+                continue; // timeout after 100us
+
+            auto& virtualImage = this->images.at(ppi->idx);
+
+            // load the freshly rendered frame as a generation source
+            {
+                auto& pass = passes[passIdx++ % passes.size()];
+                auto& cmdbuf = pass.commandBuffer;
+                cmdbuf.begin(vk);
+                const auto [sem, val] = gen.prepare(cmdbuf, virtualImage.handle());
+                cmdbuf.end(vk);
+
+                {
+                    const std::scoped_lock<std::mutex> lock(offload.mutex);
+                    cmdbuf.submit(vk, {}, VK_NULL_HANDLE, 0, {}, sem, val,
+                        pass.copyFence.handle(), offload.queue);
+                }
+
+                if (!pass.copyFence.wait(vk, UINT64_MAX))
+                    throw ls::error("virtual swapchain prepare fence wait timed out");
+                pass.copyFence.reset(vk);
+            }
+
+            // interpolate between the two most recent sources
+            gen.schedule();
+
+            // update the smoothed game-frame interval from the game-thread timestamp
+            if (lastArrivalUs != 0 && ppi->arrivalUs > lastArrivalUs) {
+                const double measured = static_cast<double>(ppi->arrivalUs - lastArrivalUs);
+                intervalUs = (intervalUs == 0) ? measured : (intervalUs * 0.8 + measured * 0.2);
+            }
+            lastArrivalUs = ppi->arrivalUs;
+
+            // running present anchor, kept within [now, now + interval] to bound drift
+            const double stepUs = intervalUs / static_cast<double>(genCount + 1);
+            const uint64_t now = nowInUs();
+            if (nextUs < now || nextUs > now + static_cast<uint64_t>(intervalUs))
+                nextUs = now;
+            const auto nextTarget = [&]() -> uint64_t {
+                if (!pace || intervalUs == 0)
+                    return 0;
+                const uint64_t target = nextUs;
+                nextUs += static_cast<uint64_t>(stepUs);
+                return target;
+            };
+
+            // present each generated frame, then the real frame
+            for (uint64_t j = 0; j < genCount; j++)
+                present([&gen](vk::CommandBuffer& cmdbuf, VkImage swapchainImage) {
+                    return gen.obtain(cmdbuf, swapchainImage);
+                }, MyVkPresentInfo{}, nextTarget());
+
+            present(recordRealFrame(virtualImage.handle()), *ppi, nextTarget());
+
+            // mark the virtual image as available again
+            this->virtual_CompleteUPresent(*ppi);
+        }
     } catch (const std::exception& e) {
         std::cerr << "lsfg-vk: virtual swapchain encountered an error:\n"
             "- " << e.what() << "\n";
@@ -331,6 +422,7 @@ void MyVkSwapchain::virtual_CompleteUPresent(const MyVkPresentInfo& info) {
     if (info.fence != VK_NULL_HANDLE) {
         auto& offload = this->device.get().offload();
 
+        const std::scoped_lock<std::mutex> lock(offload.mutex);
         auto res = vk.df().QueueSubmit(offload.queue, 0, nullptr, info.fence);
         if (res != VK_SUCCESS)
             this->status.store(res);
@@ -376,22 +468,15 @@ namespace {
 }
 
 namespace {
-    /// find now in microseconds
-    uint64_t nowInUs() noexcept {
-        timespec ts{};
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-
-        return static_cast<uint64_t>(ts.tv_sec) * 1'000'000
-            + static_cast<uint64_t>(ts.tv_nsec) / 1'000;
-    }
-    /// signal a semaphore and fence
-    void signalSemaphoreAndFence(const vk::Vulkan& vk,
+    /// signal a semaphore and fence on the shared graphics queue
+    void signalSemaphoreAndFence(const vk::Vulkan& vk, std::mutex& queueMutex,
             VkSemaphore semaphore, VkFence fence) noexcept {
         const VkSubmitInfo info{
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .signalSemaphoreCount = semaphore != VK_NULL_HANDLE,
             .pSignalSemaphores = semaphore != VK_NULL_HANDLE ? &semaphore : nullptr
         };
+        const std::scoped_lock<std::mutex> lock(queueMutex);
         vk.df().QueueSubmit(vk.queue(), 1, &info, fence);
     }
 }
@@ -404,7 +489,7 @@ VkResult MyVkSwapchain::AcquireNextImageKHR(uint64_t timeout,
     if (auto optIdx = mark_available(this->availableImages, this->availabilityMutex)) {
         *idx = *optIdx;
 
-        signalSemaphoreAndFence(vk, semaphore, fence);
+        signalSemaphoreAndFence(vk, this->device.get().offload().mutex, semaphore, fence);
         return this->status.load();
     }
 
@@ -424,7 +509,7 @@ VkResult MyVkSwapchain::AcquireNextImageKHR(uint64_t timeout,
         if (auto optIdx = mark_available(this->availableImages, this->availabilityMutex)) {
             *idx = *optIdx;
 
-            signalSemaphoreAndFence(vk, semaphore, fence);
+            signalSemaphoreAndFence(vk, this->device.get().offload().mutex, semaphore, fence);
             return res;
         }
 
@@ -445,7 +530,9 @@ VkResult MyVkSwapchain::AcquireNextImage2KHR(const VkAcquireNextImageInfoKHR* in
 }
 
 VkResult MyVkSwapchain::partial_QueuePresentKHR(const MyVkPresentInfo& info) noexcept {
-    this->presents.emplace(info);
+    MyVkPresentInfo stamped = info;
+    stamped.arrivalUs = nowInUs();
+    this->presents.emplace(stamped);
     return this->status.load();
 }
 

@@ -4,6 +4,7 @@
 
 #include "device.hpp"
 #include "instance.hpp"
+#include "../generator.hpp"
 #include "lsfg-vk-common/helpers/pointers.hpp"
 #include "lsfg-vk-common/vulkan/image.hpp"
 #include "lsfg-vk-common/vulkan/semaphore.hpp"
@@ -31,6 +32,8 @@ namespace lsfgvk::layer {
         std::optional<VkPresentModeKHR> present_mode;
         // VK_KHR_present_id(2)
         std::optional<uint64_t> id;
+        // CPU pacing: game-thread timestamp (us) when this present was submitted
+        uint64_t arrivalUs{};
     };
 
     /// swapchain wrapper (and virtual) class
@@ -109,6 +112,8 @@ namespace lsfgvk::layer {
         ls::R<MyVkLayer> layer;
         ls::R<MyVkInstance> instance;
         ls::R<MyVkDevice> device;
+
+        ls::lazy<Generator> generator; // frame generation driver, runs on the offload thread
 
         vk::TimelineSemaphore presentSemaphore;
         uint64_t presentIndex;

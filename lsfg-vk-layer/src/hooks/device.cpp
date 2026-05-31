@@ -99,27 +99,25 @@ MyVkDevice::MyVkDevice(MyVkLayer& layer, MyVkInstance& instance,
     if (!isFeatureEnabled)
         info.pNext = &timelineFeatures;
 
-    // append a graphics queue
+    // Share the game's first graphics queue (index 0) for offload work. AMD GPUs
+    // (RADV) expose only a single graphics queue, so a dedicated second queue cannot
+    // be created; requesting one trips VUID-VkDeviceQueueCreateInfo-queueCount-00382
+    // and submits to the bogus queue are rejected by the kernel. All submits to this
+    // shared queue are serialized via offloadQueue.mutex instead.
     std::vector<VkDeviceQueueCreateInfo> queues;
     queues.reserve(info.queueCreateInfoCount + 1);
     for (uint32_t i = 0; i < info.queueCreateInfoCount; ++i)
         queues.push_back(info.pQueueCreateInfos[i]);
 
     const uint32_t qfi = find_qfi(physdev, instance.funcs());
-    std::optional<uint32_t> queueIdx{0};
-    for (auto& queueInfo : queues) {
-        if (queueInfo.queueFamilyIndex == qfi) {
-            queueIdx.emplace(queueInfo.queueCount);
-            queueInfo.queueCount++; // we pray it doesn't exceed the max
-            break;
-        }
-    }
+    const bool gameRequestsGraphics = std::ranges::any_of(queues,
+        [qfi](const VkDeviceQueueCreateInfo& q) { return q.queueFamilyIndex == qfi; });
 
-    if (!queueIdx.has_value()) {
+    if (!gameRequestsGraphics) {
         const VkDeviceQueueCreateInfo queueInfo{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueFamilyIndex = qfi,
-            .queueCount = 2,
+            .queueCount = 1,
             .pQueuePriorities = new float[1]{ 1.0F }
         };
         queues.push_back(queueInfo);
@@ -138,7 +136,7 @@ MyVkDevice::MyVkDevice(MyVkLayer& layer, MyVkInstance& instance,
         loader_addr
     ));
 
-    // extract the graphics queues
-    this->dfuncs.GetDeviceQueue(this->handle, qfi, queueIdx.value_or(0), &this->offloadQueue.queue);
+    // extract the shared graphics queue (index 0)
+    this->dfuncs.GetDeviceQueue(this->handle, qfi, 0, &this->offloadQueue.queue);
     loader_addr(this->handle, this->offloadQueue.queue);
 }

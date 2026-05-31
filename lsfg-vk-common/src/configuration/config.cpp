@@ -104,6 +104,8 @@ namespace {
     Pacing parcingFromString(const std::string& str) {
         if (str == "none")
             return Pacing::None;
+        if (str == "cpu")
+            return Pacing::CPU;
         throw ls::error("unknown pacing method: " + str);
     }
     /// parse the global configuration
@@ -245,6 +247,9 @@ void ConfigFile::write(const std::filesystem::path& path) const {
         switch (conf.pacing) {
             case Pacing::None:
                 profile.insert("pacing", "none");
+                break;
+            case Pacing::CPU:
+                profile.insert("pacing", "cpu");
                 break;
         }
 
