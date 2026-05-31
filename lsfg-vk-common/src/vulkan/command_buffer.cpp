@@ -209,14 +209,18 @@ void CommandBuffer::submit(const vk::Vulkan& vk,
     if (waitTimelineSemaphore)
         waitSemaphores.push_back(waitTimelineSemaphore);
 
+    // the timeline value only applies to the timeline semaphore (pushed last); binary
+    // semaphores ignore their value. Guard against an empty list (no wait at all).
     std::vector<uint64_t> waitValues(waitSemaphores.size(), 0);
-    waitValues.back() = waitValue;
+    if (waitTimelineSemaphore)
+        waitValues.back() = waitValue;
 
     if (signalTimelineSemaphore)
         signalSemaphores.push_back(signalTimelineSemaphore);
 
     std::vector<uint64_t> signalValues(signalSemaphores.size(), 0);
-    signalValues.back() = signalValue;
+    if (signalTimelineSemaphore)
+        signalValues.back() = signalValue;
 
     // create submit info
     const VkTimelineSemaphoreSubmitInfo timelineInfo{
