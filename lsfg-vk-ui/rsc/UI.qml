@@ -309,7 +309,7 @@ ApplicationWindow {
                             subtitle: "Generated frames per real frame. Fractional values allowed."
                             RowLayout {
                                 spacing: 12
-                                Slider {
+                                StyledSlider {
                                     id: multSlider
                                     implicitWidth: 220
                                     from: 1.0; to: 4.0; stepSize: 0.05
@@ -332,7 +332,7 @@ ApplicationWindow {
                             subtitle: "Generation adapts each frame to hold this output rate."
                             RowLayout {
                                 spacing: 12
-                                Slider {
+                                StyledSlider {
                                     id: targetSlider
                                     implicitWidth: 220
                                     from: 30; to: 360; stepSize: 1
@@ -353,7 +353,7 @@ ApplicationWindow {
                             subtitle: "Upper bound on generation when the base rate is low."
                             RowLayout {
                                 spacing: 12
-                                Slider {
+                                StyledSlider {
                                     id: capSlider
                                     implicitWidth: 220
                                     from: 1.0; to: 4.0; stepSize: 0.5
@@ -378,7 +378,7 @@ ApplicationWindow {
                             subtitle: "Lower motion-estimation resolution for more performance."
                             RowLayout {
                                 spacing: 12
-                                Slider {
+                                StyledSlider {
                                     id: flowSlider
                                     implicitWidth: 220
                                     from: 0.25; to: 1.0; stepSize: 0.05
@@ -434,6 +434,35 @@ ApplicationWindow {
                             title: "Active In"
                             subtitle: "Applications this profile applies to (exe / process name)."
                             Button { text: "Edit…"; onClicked: active_in_dialog.open() }
+                        }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Repeater {
+                                id: activeChips
+                                model: backend.active_in
+                                delegate: Rectangle {
+                                    radius: 6
+                                    color: Qt.rgba(cAccent.r, cAccent.g, cAccent.b, 0.16)
+                                    border.color: Qt.rgba(cAccent.r, cAccent.g, cAccent.b, 0.35)
+                                    border.width: 1
+                                    implicitWidth: chipLabel.implicitWidth + 20
+                                    implicitHeight: 26
+                                    Label {
+                                        id: chipLabel
+                                        anchors.centerIn: parent
+                                        text: model.display
+                                        color: cText
+                                        font.pixelSize: 12
+                                    }
+                                }
+                            }
+                            Label {
+                                visible: activeChips.count === 0
+                                text: "No applications yet — click Edit to add one."
+                                color: cSubtext
+                                font.pixelSize: 12
+                            }
                         }
                     }
 

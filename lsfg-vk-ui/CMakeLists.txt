@@ -16,6 +16,7 @@ set(UI_RESOURCES
     "rsc/widgets/FlowSlider.qml"
     "rsc/widgets/List.qml"
     "rsc/widgets/Segmented.qml"
+    "rsc/widgets/StyledSlider.qml"
     "rsc/gay.pancake.lsfg-vk-ui.png"
     "rsc/UI.qml")
 
