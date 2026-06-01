@@ -40,6 +40,30 @@ namespace {
         }
         return out;
     }
+    std::string jsonEscape(const std::string& str) {
+        std::string out;
+        for (const char ch : str) {
+            if (ch == '"' || ch == '\\') out += '\\';
+            out += ch;
+        }
+        return out;
+    }
+    std::string jsonProfile(const ls::GameConf& conf) {
+        std::ostringstream os;
+        os << std::fixed << std::setprecision(2)
+           << "{ \"name\": \"" << jsonEscape(conf.name) << "\""
+           << ", \"multiplier\": " << conf.multiplier
+           << ", \"target_fps\": " << static_cast<int>(conf.target_fps)
+           << ", \"flow_scale\": " << conf.flow_scale
+           << ", \"performance_mode\": " << (conf.performance_mode ? "true" : "false")
+           << ", \"pacing\": \"" << pacingToString(conf.pacing) << "\""
+           << ", \"gpu\": " << (conf.gpu.has_value() ? "\"" + jsonEscape(*conf.gpu) + "\"" : "null")
+           << ", \"active_in\": [";
+        for (size_t i = 0; i < conf.active_in.size(); i++)
+            os << (i != 0 ? ", " : "") << "\"" << jsonEscape(conf.active_in[i]) << "\"";
+        os << "] }";
+        return os.str();
+    }
     std::string modeSummary(const ls::GameConf& conf) {
         std::ostringstream os;
         os << std::fixed << std::setprecision(2);
@@ -56,8 +80,19 @@ namespace {
         return it == profiles.end() ? nullptr : &*it;
     }
 
-    int cmd_list(ls::ConfigFile& config) {
+    int cmd_list(ls::ConfigFile& config, bool json) {
         const auto& global = config.global();
+        if (json) {
+            std::cout << "{ \"global\": { \"dll\": "
+                      << (global.dll.has_value() ? "\"" + jsonEscape(*global.dll) + "\"" : "null")
+                      << ", \"allow_fp16\": " << (global.allow_fp16 ? "true" : "false")
+                      << " }, \"profiles\": [";
+            const auto& profiles = config.profiles();
+            for (size_t i = 0; i < profiles.size(); i++)
+                std::cout << (i != 0 ? ",\n  " : "\n  ") << jsonProfile(profiles[i]);
+            std::cout << (profiles.empty() ? "] }" : "\n] }") << '\n';
+            return 0;
+        }
         std::cout << "Global\n"
                   << "  dll        " << global.dll.value_or("(unset)") << '\n'
                   << "  allow_fp16 " << (global.allow_fp16 ? "true" : "false") << "\n\n"
@@ -70,9 +105,10 @@ namespace {
                       << join(conf.active_in, ", ") << '\n';
         return 0;
     }
-    int cmd_show(ls::ConfigFile& config, const std::string& name) {
+    int cmd_show(ls::ConfigFile& config, const std::string& name, bool json) {
         const auto* conf = findProfile(config, name);
         if (conf == nullptr) { std::cerr << "No such profile: " << name << '\n'; return 1; }
+        if (json) { std::cout << jsonProfile(*conf) << '\n'; return 0; }
         std::cout << std::fixed << std::setprecision(2)
                   << "Profile: " << conf->name << '\n'
                   << "  multiplier        " << conf->multiplier << '\n'
@@ -192,7 +228,13 @@ PROFILE KEYS:
     }
 }
 
-int config::run(const std::vector<std::string>& args) {
+int config::run(const std::vector<std::string>& argv) {
+    bool json = false;
+    std::vector<std::string> args;
+    for (const auto& arg : argv) {
+        if (arg == "--json") json = true;
+        else args.push_back(arg);
+    }
     if (args.empty()) { usage(); return 1; }
     const std::string& action = args[0];
 
@@ -202,8 +244,8 @@ int config::run(const std::vector<std::string>& args) {
             ls::ConfigFile::createDefaultConfigFile(path);
         ls::ConfigFile config{path};
 
-        if (action == "list")                          return cmd_list(config);
-        if (action == "show"   && args.size() >= 2)    return cmd_show(config, args[1]);
+        if (action == "list")                          return cmd_list(config, json);
+        if (action == "show"   && args.size() >= 2)    return cmd_show(config, args[1], json);
         if (action == "set"    && args.size() >= 4)    return cmd_set(config, path, args[1], args[2], args[3]);
         if (action == "create" && args.size() >= 2)    return cmd_create(config, path, args[1]);
         if (action == "delete" && args.size() >= 2)    return cmd_delete(config, path, args[1]);

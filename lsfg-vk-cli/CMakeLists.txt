@@ -19,3 +19,6 @@ target_compile_options(lsfg-vk-cli PRIVATE
 
 install(TARGETS lsfg-vk-cli
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(FILES "completion/lsfg-vk.bash"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/bash-completion/completions"
+    RENAME "lsfg-vk")
