@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <ctime>
 #include <exception>
 #include <functional>
@@ -109,6 +110,11 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
 
     this->doneSemaphore.emplace(vk, 0);
     this->thread = std::thread(&MyVkSwapchain::thread_main, this);
+
+    if (std::getenv("LSFGVK_DEBUG") != nullptr)
+        std::cerr << "lsfg-vk: virtual swapchain created " << info.imageExtent.width << "x"
+            << info.imageExtent.height << " (multiplier " << layer.profile().multiplier
+            << ", " << this->images.size() << " images)\n";
 
     // this->reinitialize();
 }
@@ -245,6 +251,14 @@ void MyVkSwapchain::thread_main() noexcept {
     uint64_t lastArrivalUs{0};  // previous game present timestamp
     uint64_t nextUs{0};         // running present anchor for CPU pacing
 
+    // LSFGVK_DEBUG enables a periodic framerate report (base game rate vs generated
+    // output rate) on stderr; capture it with PROTON_LOG=1 or a launch-option wrapper.
+    const bool logFps = std::getenv("LSFGVK_DEBUG") != nullptr;
+    uint64_t logUs{0}, realFrames{0}, genFrames{0};
+    if (logFps)
+        std::cerr << "lsfg-vk: offload thread started (multiplier " << (genCount + 1) << ")\n";
+    bool firstPresent = true;
+
     try {
         uint64_t counter{1};
         while (this->running.load()) {
@@ -252,6 +266,11 @@ void MyVkSwapchain::thread_main() noexcept {
             const auto ppi = this->virtual_FetchUPresent(100'1000, counter);
             if (!ppi.has_value())
                 continue; // timeout after 100us
+
+            if (logFps && firstPresent) {
+                firstPresent = false;
+                std::cerr << "lsfg-vk: offload thread received first present\n";
+            }
 
             auto& virtualImage = this->images.at(ppi->idx);
 
@@ -307,6 +326,24 @@ void MyVkSwapchain::thread_main() noexcept {
 
             // mark the virtual image as available again
             this->virtual_CompleteUPresent(*ppi);
+
+            // periodic framerate report: base game rate vs generated output rate
+            if (logFps) {
+                realFrames++;
+                genFrames += genCount;
+                const uint64_t t = nowInUs();
+                if (logUs == 0) {
+                    logUs = t;
+                } else if (t - logUs >= 2'000'000) {
+                    const double secs = static_cast<double>(t - logUs) / 1'000'000.0;
+                    std::cerr << "lsfg-vk: base "
+                        << static_cast<uint64_t>(realFrames / secs) << " fps -> output "
+                        << static_cast<uint64_t>((realFrames + genFrames) / secs) << " fps\n";
+                    logUs = t;
+                    realFrames = 0;
+                    genFrames = 0;
+                }
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "lsfg-vk: virtual swapchain encountered an error:\n"
