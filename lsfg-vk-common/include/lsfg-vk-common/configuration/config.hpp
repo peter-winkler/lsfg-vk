@@ -42,6 +42,8 @@ namespace ls {
         bool performance_mode{false};
         /// pacing method
         Pacing pacing{Pacing::None};
+        /// adaptive target output fps; 0 disables adaptive (the fixed multiplier is used)
+        float target_fps{0.0F};
     };
 
     /// parsed configuration file

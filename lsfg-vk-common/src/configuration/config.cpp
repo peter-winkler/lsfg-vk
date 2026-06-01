@@ -129,7 +129,8 @@ namespace {
             .multiplier = tbl["multiplier"].value_or(2.0F),
             .flow_scale = tbl["flow_scale"].value_or(1.0F),
             .performance_mode = tbl["performance_mode"].value_or(false),
-            .pacing = parcingFromString(tbl["pacing"].value_or<std::string>("none"))
+            .pacing = parcingFromString(tbl["pacing"].value_or<std::string>("none")),
+            .target_fps = tbl["target_fps"].value_or(0.0F)
         };
 
         if (conf.multiplier <= 1.0F)
@@ -168,7 +169,8 @@ namespace {
             .multiplier = 2.0F,
             .flow_scale = 1.0F,
             .performance_mode = false,
-            .pacing = Pacing::None
+            .pacing = Pacing::None,
+            .target_fps = 0.0F
         };
 
         const char* gpu = std::getenv("LSFGVK_GPU");
@@ -181,6 +183,8 @@ namespace {
         if (performance) conf.performance_mode = std::string(performance) == "1";
         const char* pacing = std::getenv("LSFGVK_PACING");
         if (pacing) conf.pacing = parcingFromString(std::string(pacing));
+        const char* target = std::getenv("LSFGVK_TARGET_FPS");
+        if (target) conf.target_fps = std::stof(target);
 
         if (conf.multiplier <= 1.0F)
             throw ls::error("multiplier must be greater than 1");
@@ -243,6 +247,7 @@ void ConfigFile::write(const std::filesystem::path& path) const {
             profile.insert("gpu", conf.gpu.value_or(""));
         profile.insert("multiplier", static_cast<double>(conf.multiplier));
         profile.insert("flow_scale", conf.flow_scale);
+        profile.insert("target_fps", static_cast<double>(conf.target_fps));
         profile.insert("performance_mode", conf.performance_mode);
         switch (conf.pacing) {
             case Pacing::None:
