@@ -17,6 +17,9 @@ set(UI_RESOURCES
     "rsc/widgets/List.qml"
     "rsc/widgets/Segmented.qml"
     "rsc/widgets/StyledSlider.qml"
+    "rsc/widgets/StyledSwitch.qml"
+    "rsc/widgets/PillButton.qml"
+    "rsc/widgets/StyledComboBox.qml"
     "rsc/gay.pancake.lsfg-vk-ui.png"
     "rsc/UI.qml")
 

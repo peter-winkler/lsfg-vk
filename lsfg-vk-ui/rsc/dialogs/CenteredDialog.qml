@@ -2,6 +2,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../widgets"
 
 Dialog {
     property string name
@@ -10,7 +11,6 @@ Dialog {
 
     id: root
     title: name
-    standardButtons: Dialog.Ok | Dialog.Cancel
     onAccepted: root.confirm()
 
     modal: true
@@ -33,6 +33,18 @@ Dialog {
         font.pixelSize: 16
         font.bold: true
         leftPadding: 22; rightPadding: 22; topPadding: 20; bottomPadding: 4
+    }
+
+    footer: Item {
+        implicitHeight: 60
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 22; anchors.rightMargin: 22; anchors.bottomMargin: 18
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            PillButton { text: "Cancel"; onClicked: root.reject() }
+            PillButton { text: "OK"; accented: true; onClicked: root.accept() }
+        }
     }
 
     contentItem: ColumnLayout {

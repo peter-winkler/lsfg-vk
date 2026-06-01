@@ -204,10 +204,10 @@ ApplicationWindow {
                     }
                 }
 
-                Button {
+                PillButton {
                     Layout.fillWidth: true
-                    text: "  New Profile"
-                    icon.name: "list-add"
+                    text: "New Profile"
+                    accented: true
                     onClicked: { create_name.text = ""; create_dialog.open() }
                 }
 
@@ -279,14 +279,14 @@ ApplicationWindow {
                             }
                             Label { text: "Profile settings"; color: cSubtext; font.pixelSize: 12 }
                         }
-                        Button {
+                        PillButton {
                             text: "Rename"
                             onClicked: {
                                 rename_name.text = backend.profiles.data(backend.profiles.index(backend.profile_index, 0))
                                 rename_dialog.open()
                             }
                         }
-                        Button { text: "Delete"; onClicked: delete_dialog.open() }
+                        PillButton { text: "Delete"; onClicked: delete_dialog.open() }
                     }
 
                     // Frame Generation -----------------------------------------
@@ -395,7 +395,7 @@ ApplicationWindow {
                         Row2 {
                             title: "Performance Mode"
                             subtitle: "Use a significantly lighter generation model."
-                            Switch {
+                            StyledSwitch {
                                 checked: backend.performance_mode
                                 onToggled: backend.performance_mode = checked
                             }
@@ -418,7 +418,7 @@ ApplicationWindow {
                         Row2 {
                             title: "GPU"
                             subtitle: "Which device runs frame generation."
-                            ComboBox {
+                            StyledComboBox {
                                 implicitWidth: 220
                                 model: backend.gpus
                                 currentIndex: backend.gpu
@@ -433,7 +433,7 @@ ApplicationWindow {
                         Row2 {
                             title: "Active In"
                             subtitle: "Applications this profile applies to (exe / process name)."
-                            Button { text: "Edit…"; onClicked: active_in_dialog.open() }
+                            PillButton { text: "Edit…"; onClicked: active_in_dialog.open() }
                         }
                         Flow {
                             Layout.fillWidth: true

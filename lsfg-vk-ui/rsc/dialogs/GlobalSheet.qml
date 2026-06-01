@@ -12,7 +12,6 @@ Dialog {
     width: 540
     padding: 22
     title: "Global Settings"
-    standardButtons: Dialog.Close
 
     SystemPalette { id: sys; colorGroup: SystemPalette.Active }
     background: Rectangle {
@@ -26,6 +25,15 @@ Dialog {
         color: sys.windowText
         font.pixelSize: 16; font.bold: true
         leftPadding: 22; rightPadding: 22; topPadding: 20; bottomPadding: 4
+    }
+    footer: Item {
+        implicitHeight: 60
+        RowLayout {
+            anchors.fill: parent
+            anchors.leftMargin: 22; anchors.rightMargin: 22; anchors.bottomMargin: 18
+            Item { Layout.fillWidth: true }
+            PillButton { text: "Close"; onClicked: control.close() }
+        }
     }
 
     ColumnLayout {
@@ -55,7 +63,7 @@ Dialog {
                 Label { text: "Allow half-precision"; font.bold: true }
                 Label { text: "Acceleration through fp16 (a large speed-up on RDNA)"; opacity: 0.6; font.pixelSize: 12 }
             }
-            Switch {
+            StyledSwitch {
                 checked: backend.allow_fp16
                 onToggled: backend.allow_fp16 = checked
             }
