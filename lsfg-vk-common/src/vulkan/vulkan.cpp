@@ -393,7 +393,16 @@ VulkanDeviceFuncs vk::initVulkanDeviceFuncs(PFN_vkGetDeviceProcAddr f, VkDevice 
         .WaitForPresentKHR = reinterpret_cast<PFN_vkWaitForPresentKHR>(
             f(d, "vkWaitForPresentKHR")),
         .WaitForPresent2KHR = reinterpret_cast<PFN_vkWaitForPresent2KHR>(
-            f(d, "vkWaitForPresent2KHR"))
+            f(d, "vkWaitForPresent2KHR")),
+
+        .GetSwapchainTimingPropertiesEXT = reinterpret_cast<PFN_vkGetSwapchainTimingPropertiesEXT>(
+            f(d, "vkGetSwapchainTimingPropertiesEXT")),
+        .GetSwapchainTimeDomainPropertiesEXT = reinterpret_cast<PFN_vkGetSwapchainTimeDomainPropertiesEXT>(
+            f(d, "vkGetSwapchainTimeDomainPropertiesEXT")),
+        .SetSwapchainPresentTimingQueueSizeEXT = reinterpret_cast<PFN_vkSetSwapchainPresentTimingQueueSizeEXT>(
+            f(d, "vkSetSwapchainPresentTimingQueueSizeEXT")),
+        .GetPastPresentationTimingEXT = reinterpret_cast<PFN_vkGetPastPresentationTimingEXT>(
+            f(d, "vkGetPastPresentationTimingEXT"))
     };
 }
 

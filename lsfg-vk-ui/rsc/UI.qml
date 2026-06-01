@@ -409,8 +409,8 @@ ApplicationWindow {
                             title: "Pacing Mode"
                             subtitle: "How generated frames are spaced for presentation."
                             Segmented {
-                                implicitWidth: 180
-                                model: ["None", "CPU"]
+                                implicitWidth: 240
+                                model: ["None", "CPU", "Display"]
                                 currentIndex: backend.pacing_mode
                                 onActivated: (index) => backend.pacing_mode = index
                             }

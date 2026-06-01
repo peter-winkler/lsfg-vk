@@ -121,6 +121,12 @@ namespace vk {
         // optional extension functions
         PFN_vkWaitForPresentKHR WaitForPresentKHR;
         PFN_vkWaitForPresent2KHR WaitForPresent2KHR;
+
+        // present timing (VK_EXT_present_timing); null unless enabled on the device
+        PFN_vkGetSwapchainTimingPropertiesEXT GetSwapchainTimingPropertiesEXT;
+        PFN_vkGetSwapchainTimeDomainPropertiesEXT GetSwapchainTimeDomainPropertiesEXT;
+        PFN_vkSetSwapchainPresentTimingQueueSizeEXT SetSwapchainPresentTimingQueueSizeEXT;
+        PFN_vkGetPastPresentationTimingEXT GetPastPresentationTimingEXT;
     };
 
     /// initialize vulkan device function pointers

@@ -106,6 +106,8 @@ namespace {
             return Pacing::None;
         if (str == "cpu")
             return Pacing::CPU;
+        if (str == "present-timing" || str == "present" || str == "gpu")
+            return Pacing::PresentTiming;
         throw ls::error("unknown pacing method: " + str);
     }
     /// parse the global configuration
@@ -255,6 +257,9 @@ void ConfigFile::write(const std::filesystem::path& path) const {
                 break;
             case Pacing::CPU:
                 profile.insert("pacing", "cpu");
+                break;
+            case Pacing::PresentTiming:
+                profile.insert("pacing", "present-timing");
                 break;
         }
 

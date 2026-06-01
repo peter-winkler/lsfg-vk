@@ -103,7 +103,7 @@ namespace lsfgvk::layer {
         /// @param idx index of the image to present
         /// @throws ls::error on critical failure
         void virtual_PresentLinked(const MyVkPresentInfo& original_info,
-            const vk::Semaphore& semaphore, uint32_t idx);
+            const vk::Semaphore& semaphore, uint32_t idx, uint64_t presentTimeNs);
 
         /// mark a present from the underlying swapchain as complete
         /// @param info present information
@@ -122,6 +122,19 @@ namespace lsfgvk::layer {
         VkSwapchainKHR handle; // from real swapchain
         std::vector<VkImage> swapchainImages;
 
+        // VK_EXT_present_timing state (set when the profile selects present-timing pacing)
+        bool presentTimingActive{false};
+        uint64_t timeDomainId{0};
+        VkPresentStageFlagsEXT timingStage{0}; // present stage used for targets + feedback
+        uint64_t nextPsl{0};           // next present-stage-local target (ns)
+        uint64_t lastAchievedPsl{0};   // latest achieved present time, present-stage-local (ns)
+        uint64_t prevAchievedPsl{0};   // previous achieved present time, for jitter stats
+        double pacingSum{0.0};         // achieved-interval accumulators, reported every 2s
+        double pacingSumSq{0.0};
+        uint64_t pacingCount{0};
+        uint64_t ptPresentId{0};       // incrementing id to key the timing results queue
+        bool ptTargeting{false};       // experimental: drive presents via absolute targets
+
         std::vector<vk::Image> images; // virtual swapchain images
         std::mutex availabilityMutex;
         std::vector<bool> availableImages;
@@ -133,6 +146,11 @@ namespace lsfgvk::layer {
         std::atomic<VkResult> status{VK_SUCCESS};
         std::thread thread;
         void thread_main() noexcept;
+
+        /// configure VK_EXT_present_timing on the real swapchain (queue size + time domain)
+        void setupPresentTiming() noexcept;
+        /// drain achieved present timings and advance the pacing anchor + jitter stats
+        void drainPresentTiming() noexcept;
     };
 
 }

@@ -46,7 +46,8 @@ MyVkInstance::MyVkInstance(MyVkLayer& layer,
         {
             "VK_KHR_get_physical_device_properties2",
             "VK_KHR_external_memory_capabilities",
-            "VK_KHR_external_semaphore_capabilities"
+            "VK_KHR_external_semaphore_capabilities",
+            "VK_KHR_get_surface_capabilities2"
         }
     );
     info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());

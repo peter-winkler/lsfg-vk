@@ -92,6 +92,7 @@ namespace lsfgvk::ui {
             switch (conf.pacing) {
                 case ls::Pacing::None: return 0;
                 case ls::Pacing::CPU: return 1;
+                case ls::Pacing::PresentTiming: return 2;
             }
             throw std::runtime_error("Unknown pacing type in backend");
         }
@@ -167,6 +168,9 @@ namespace lsfgvk::ui {
                     break;
                 case 1:
                     conf.pacing = ls::Pacing::CPU;
+                    break;
+                case 2:
+                    conf.pacing = ls::Pacing::PresentTiming;
                     break;
                 default:
                     throw std::runtime_error("Unknown pacing mode in backend");

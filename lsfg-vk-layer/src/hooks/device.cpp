@@ -38,6 +38,17 @@ namespace {
 
         return extensions;
     }
+    /// check whether a physical device advertises a device extension
+    bool deviceSupportsExtension(VkPhysicalDevice physdev,
+            const vk::VulkanInstanceFuncs& funcs, const char* name) {
+        uint32_t count = 0;
+        funcs.EnumerateDeviceExtensionProperties(physdev, nullptr, &count, nullptr);
+        std::vector<VkExtensionProperties> props(count);
+        funcs.EnumerateDeviceExtensionProperties(physdev, nullptr, &count, props.data());
+        return std::ranges::any_of(props, [name](const VkExtensionProperties& prop) {
+            return std::string(prop.extensionName) == std::string(name);
+        });
+    }
     /// helper function for finding a graphics queue family
     uint32_t find_qfi(VkPhysicalDevice physdev, const vk::VulkanInstanceFuncs& funcs) {
         uint32_t queueFamilyCount = 0;
@@ -59,17 +70,28 @@ MyVkDevice::MyVkDevice(MyVkLayer& layer, MyVkInstance& instance,
             PFN_vkGetDeviceProcAddr addr, PFN_vkSetDeviceLoaderData loader_addr,
             const std::function<VkDevice(VkDeviceCreateInfo*)>& createFunc) :
         layer(std::ref(layer)), instance(std::ref(instance)) {
-    // add required extensions
+    // add required extensions; present timing is added only when the active profile
+    // selects that pacing mode and the physical device actually supports it
+    std::vector<const char*> required{
+        "VK_KHR_external_memory",
+        "VK_KHR_external_memory_fd",
+        "VK_KHR_external_semaphore",
+        "VK_KHR_external_semaphore_fd",
+        "VK_KHR_timeline_semaphore"
+    };
+    const bool wantPresentTiming = layer.profile().pacing == ls::Pacing::PresentTiming
+        && deviceSupportsExtension(physdev, instance.funcs(), VK_EXT_PRESENT_TIMING_EXTENSION_NAME);
+    if (wantPresentTiming) {
+        // VK_EXT_present_timing requires present_id2 + calibrated_timestamps as deps
+        required.push_back(VK_EXT_PRESENT_TIMING_EXTENSION_NAME);
+        required.push_back(VK_KHR_PRESENT_ID_2_EXTENSION_NAME);
+        required.push_back(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+    }
+
     auto extensions = add_extensions(
         info.ppEnabledExtensionNames,
         info.enabledExtensionCount,
-        {
-            "VK_KHR_external_memory",
-            "VK_KHR_external_memory_fd",
-            "VK_KHR_external_semaphore",
-            "VK_KHR_external_semaphore_fd",
-            "VK_KHR_timeline_semaphore"
-        }
+        required
     );
     info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     info.ppEnabledExtensionNames = extensions.data();
@@ -98,6 +120,24 @@ MyVkDevice::MyVkDevice(MyVkLayer& layer, MyVkInstance& instance,
     };
     if (!isFeatureEnabled)
         info.pNext = &timelineFeatures;
+
+    // enable the present-timing feature (absolute-time targeting) and present_id2
+    VkPhysicalDevicePresentTimingFeaturesEXT presentTimingFeatures{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_TIMING_FEATURES_EXT,
+        .pNext = const_cast<void*>(info.pNext),
+        .presentTiming = VK_TRUE,
+        .presentAtAbsoluteTime = VK_TRUE
+    };
+    if (wantPresentTiming)
+        info.pNext = &presentTimingFeatures;
+
+    VkPhysicalDevicePresentId2FeaturesKHR presentId2Features{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_2_FEATURES_KHR,
+        .pNext = const_cast<void*>(info.pNext),
+        .presentId2 = VK_TRUE
+    };
+    if (wantPresentTiming)
+        info.pNext = &presentId2Features;
 
     // Share the game's first graphics queue (index 0) for offload work. AMD GPUs
     // (RADV) expose only a single graphics queue, so a dedicated second queue cannot

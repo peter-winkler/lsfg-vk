@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <exception>
@@ -87,9 +88,21 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
         info.pNext
     );
 
+    // when the profile selects present-timing pacing and the device enabled the
+    // extension, create the real swapchain with the timing bit so the offload thread
+    // can target per-frame present times instead of CPU-sleeping
+    const bool wantPresentTiming =
+        layer.profile().pacing == ls::Pacing::PresentTiming
+        && vk.df().SetSwapchainPresentTimingQueueSizeEXT != nullptr;
+    if (wantPresentTiming)
+        info.flags |= VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT
+            | VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR;
+
     // create underlying swapchain
     this->handle = createFunc(&info);
     this->swapchainImages = getSwapchainImages(vk, this->handle);
+    if (wantPresentTiming)
+        this->setupPresentTiming();
 
     // create virtual swapchain images
     this->images.reserve(this->swapchainImages.size());
@@ -122,6 +135,123 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
 // void MyVkSwapchain::reinitialize() {
 //     // ...
 // }
+
+void MyVkSwapchain::setupPresentTiming() noexcept {
+    const auto& vk = this->device.get().vkd();
+    const auto& df = vk.df();
+
+    // a results queue is required to read achieved present times back for the pacing loop
+    df.SetSwapchainPresentTimingQueueSizeEXT(vk.dev(), this->handle, 16);
+
+    // RADV exposes the present-stage-local domain for targeting. We can't read "now" in
+    // that opaque domain directly, so we run a closed loop: request feedback, read the
+    // achieved present times back in this same domain, and anchor future targets to them.
+    uint64_t counter{0};
+    VkSwapchainTimeDomainPropertiesEXT props{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_TIME_DOMAIN_PROPERTIES_EXT
+    };
+    df.GetSwapchainTimeDomainPropertiesEXT(vk.dev(), this->handle, &props, &counter);
+
+    const uint32_t count = props.timeDomainCount;
+    std::vector<VkTimeDomainKHR> domains(count);
+    std::vector<uint64_t> ids(count);
+    props.pTimeDomains = domains.data();
+    props.pTimeDomainIds = ids.data();
+    df.GetSwapchainTimeDomainPropertiesEXT(vk.dev(), this->handle, &props, &counter);
+
+    bool found = false;
+    for (uint32_t i = 0; i < count; i++)
+        if (domains[i] == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT) {
+            this->timeDomainId = ids[i];
+            found = true;
+            break;
+        }
+    if (!found && count > 0) { // fall back to whatever single domain the driver offers
+        this->timeDomainId = ids[0];
+        found = true;
+    }
+
+    // pace to first-pixel-out (scanout); this is what Wayland presentation feedback
+    // reports, whereas first-pixel-visible is typically unknown (reported as zero)
+    this->timingStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+    this->presentTimingActive = found;
+
+    // Driving presents via absolute targets currently destabilises FIFO swapchains on
+    // RADV's young present-timing path (rapid out-of-date recreation), and FIFO is
+    // already vsync-paced, so by default we only *measure* via the feedback loop and let
+    // CPU pacing place the frames. The targeting path is kept behind an opt-in env var.
+    this->ptTargeting = std::getenv("LSFGVK_PT_EXPERIMENTAL_TARGET") != nullptr;
+
+    if (std::getenv("LSFGVK_DEBUG") != nullptr)
+        std::cerr << "lsfg-vk: present timing " << (found ? "active" : "inactive")
+            << (found ? (this->ptTargeting ? ", experimental targeting ON" : ", measuring (CPU-paced)") : "")
+            << " (" << count << " domains, id " << this->timeDomainId << ")\n";
+}
+
+void MyVkSwapchain::drainPresentTiming() noexcept {
+    const auto& vk = this->device.get().vkd();
+    const auto& df = vk.df();
+
+    const VkPastPresentationTimingInfoEXT info{
+        .sType = VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_INFO_EXT,
+        .swapchain = this->handle
+    };
+    VkPastPresentationTimingPropertiesEXT props{
+        .sType = VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_PROPERTIES_EXT
+    };
+    if (df.GetPastPresentationTimingEXT(vk.dev(), &info, &props) != VK_SUCCESS)
+        return;
+    const uint32_t count = props.presentationTimingCount;
+    if (count == 0)
+        return;
+
+    // allocate up to four stage slots per result; the driver fills the stages it knows.
+    // We pace to first-pixel-out (scanout), falling back to any other non-zero stage.
+    constexpr uint32_t kMaxStages = 4;
+    std::vector<VkPastPresentationTimingEXT> timings(count);
+    std::vector<VkPresentStageTimeEXT> stages(static_cast<size_t>(count) * kMaxStages);
+    for (uint32_t i = 0; i < count; i++)
+        timings[i] = VkPastPresentationTimingEXT{
+            .sType = VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_EXT,
+            .presentStageCount = kMaxStages,
+            .pPresentStages = &stages[static_cast<size_t>(i) * kMaxStages]
+        };
+    props.presentationTimingCount = count;
+    props.pPresentationTimings = timings.data();
+    if (df.GetPastPresentationTimingEXT(vk.dev(), &info, &props) != VK_SUCCESS)
+        return;
+
+    for (uint32_t i = 0; i < props.presentationTimingCount; i++) {
+        const auto& timing = timings[i];
+        if (!timing.reportComplete)
+            continue;
+
+        uint64_t achieved = 0;
+        uint64_t fallback = 0;
+        for (uint32_t s = 0; s < timing.presentStageCount; s++) {
+            const auto& st = timing.pPresentStages[s];
+            if (st.time == 0)
+                continue;
+            if (st.stage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT)
+                achieved = st.time;
+            else if (st.time > fallback)
+                fallback = st.time;
+        }
+        if (achieved == 0)
+            achieved = fallback;
+        if (achieved == 0 || achieved <= this->lastAchievedPsl)
+            continue; // unavailable, out of order, or duplicate
+
+        if (this->prevAchievedPsl != 0) {
+            const double delta = static_cast<double>(achieved - this->prevAchievedPsl);
+            this->pacingSum += delta;
+            this->pacingSumSq += delta * delta;
+            this->pacingCount++;
+        }
+        this->prevAchievedPsl = achieved;
+        this->lastAchievedPsl = achieved;
+    }
+}
 
 MyVkSwapchain::~MyVkSwapchain() noexcept {
     this->running.store(false);
@@ -179,7 +309,7 @@ void MyVkSwapchain::thread_main() noexcept {
     // timeline semaphore + value the blit must wait on, or {VK_NULL_HANDLE, 0}),
     // present it linked to the original present, then block until the copy completes
     const auto present = [&](const auto& recordBlit, const MyVkPresentInfo& linked,
-            uint64_t targetUs) {
+            uint64_t targetUs, uint64_t presentTimeNs) {
         auto& pass = passes[passIdx++ % passes.size()];
         const uint32_t real_idx = this->virtual_AcquireNext(pass.acquireSemaphore);
         auto& swapchainImage = this->swapchainImages.at(real_idx);
@@ -198,10 +328,11 @@ void MyVkSwapchain::thread_main() noexcept {
             );
         }
 
-        // pace the present: the copy above overlaps with the sleep
+        // pace the present: CPU pacing sleeps until targetUs (the copy overlaps the
+        // sleep); present-timing instead hands the present an absolute target (presentTimeNs)
         if (targetUs)
             sleepUntilUs(targetUs);
-        this->virtual_PresentLinked(linked, pass.presentSemaphore, real_idx);
+        this->virtual_PresentLinked(linked, pass.presentSemaphore, real_idx, presentTimeNs);
 
         if (!pass.copyFence.wait(vk, UINT64_MAX))
             throw ls::error("virtual swapchain copy fence wait timed out");
@@ -249,7 +380,13 @@ void MyVkSwapchain::thread_main() noexcept {
         };
     };
 
-    const bool pace = this->layer.get().profile().pacing == ls::Pacing::CPU;
+    // present-timing measures via its feedback loop but, unless experimental targeting is
+    // enabled and active, places frames with CPU pacing, so the mode is never worse than
+    // CPU pacing
+    const auto pacingMode = this->layer.get().profile().pacing;
+    const bool useTargeting = this->presentTimingActive && this->ptTargeting;
+    const bool pace = pacingMode == ls::Pacing::CPU
+        || (pacingMode == ls::Pacing::PresentTiming && !useTargeting);
     double intervalUs{0};       // smoothed game-frame interval
     uint64_t lastArrivalUs{0};  // previous game present timestamp
     uint64_t nextUs{0};         // running present anchor for CPU pacing
@@ -324,14 +461,33 @@ void MyVkSwapchain::thread_main() noexcept {
 
             // running present anchor, kept within [now, now + interval] to bound drift
             const double stepUs = intervalUs / static_cast<double>(frames + 1);
+            const uint64_t stepNs = static_cast<uint64_t>(stepUs * 1000.0);
             const uint64_t now = nowInUs();
             if (nextUs < now || nextUs > now + static_cast<uint64_t>(intervalUs))
                 nextUs = now;
-            const auto nextTarget = [&]() -> uint64_t {
-                if (!pace || intervalUs == 0)
+            // CPU pacing anchor: absolute monotonic schedule (us), 0 until an interval is known
+            const auto nextSchedule = [&]() -> uint64_t {
+                if (intervalUs == 0)
                     return 0;
                 const uint64_t target = nextUs;
                 nextUs += static_cast<uint64_t>(stepUs);
+                return target;
+            };
+
+            // present-timing closed loop: read achieved present times and keep the
+            // present-stage-local target a few frames ahead of the latest one. This both
+            // bootstraps the opaque domain's clock and corrects drift every cycle.
+            if (this->presentTimingActive) {
+                this->drainPresentTiming();
+                const uint64_t lead = 4 * stepNs;
+                if (this->lastAchievedPsl != 0 && this->nextPsl < this->lastAchievedPsl + lead)
+                    this->nextPsl = this->lastAchievedPsl + lead;
+            }
+            const auto nextPslTarget = [&]() -> uint64_t {
+                if (!useTargeting || this->nextPsl == 0)
+                    return 0;
+                const uint64_t target = this->nextPsl;
+                this->nextPsl += stepNs;
                 return target;
             };
 
@@ -339,9 +495,10 @@ void MyVkSwapchain::thread_main() noexcept {
             for (uint64_t j = 0; j < frames; j++)
                 present([&gen, j](vk::CommandBuffer& cmdbuf, VkImage swapchainImage) {
                     return gen.obtain(cmdbuf, swapchainImage, j);
-                }, MyVkPresentInfo{}, nextTarget());
+                }, MyVkPresentInfo{}, pace ? nextSchedule() : 0, nextPslTarget());
 
-            present(recordRealFrame(virtualImage.handle()), *ppi, nextTarget());
+            present(recordRealFrame(virtualImage.handle()), *ppi,
+                pace ? nextSchedule() : 0, nextPslTarget());
 
             // mark the virtual image as available again
             this->virtual_CompleteUPresent(*ppi);
@@ -358,6 +515,18 @@ void MyVkSwapchain::thread_main() noexcept {
                     std::cerr << "lsfg-vk: base "
                         << static_cast<uint64_t>(realFrames / secs) << " fps -> output "
                         << static_cast<uint64_t>((realFrames + genFrames) / secs) << " fps\n";
+                    if (this->presentTimingActive && this->pacingCount > 1) {
+                        const double n = static_cast<double>(this->pacingCount);
+                        const double mean = this->pacingSum / n;
+                        const double var = this->pacingSumSq / n - mean * mean;
+                        std::cerr << "lsfg-vk: present-timing achieved interval "
+                            << static_cast<uint64_t>(mean / 1000.0) << " us (jitter "
+                            << static_cast<uint64_t>(std::sqrt(var > 0.0 ? var : 0.0) / 1000.0)
+                            << " us, n=" << this->pacingCount << ")\n";
+                        this->pacingSum = 0.0;
+                        this->pacingSumSq = 0.0;
+                        this->pacingCount = 0;
+                    }
                     logUs = t;
                     realFrames = 0;
                     genFrames = 0;
@@ -417,7 +586,7 @@ uint32_t MyVkSwapchain::virtual_AcquireNext(const vk::Semaphore& semaphore) {
 }
 
 void MyVkSwapchain::virtual_PresentLinked(const MyVkPresentInfo& original_info,
-        const vk::Semaphore& semaphore, uint32_t idx) {
+        const vk::Semaphore& semaphore, uint32_t idx, uint64_t presentTimeNs) {
     const auto& vk = this->device.get().vkd();
 
     const uint64_t presentId = original_info.id.value_or(0);
@@ -439,6 +608,42 @@ void MyVkSwapchain::virtual_PresentLinked(const MyVkPresentInfo& original_info,
         chain = &presentModeInfo;
     else if (original_info.id.has_value())
         chain = &presentIdInfo;
+
+    // present-timing keys its results queue by present id, so tag every timed present
+    // with our own incrementing VK_KHR_present_id2 value
+    this->ptPresentId++;
+    const VkPresentId2KHR presentId2Info{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR,
+        .pNext = chain,
+        .swapchainCount = 1,
+        .pPresentIds = &this->ptPresentId
+    };
+    if (this->presentTimingActive)
+        chain = &presentId2Info;
+
+    // present-timing: target an absolute time in the present-stage-local domain and
+    // request feedback for the same stage. targetTime 0 (bootstrap) means "no target,
+    // just feedback"; the stage fields are required for present-stage-local targeting.
+    const VkPresentTimingInfoEXT timingInfo{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_TIMING_INFO_EXT,
+        .flags = 0,
+        .targetTime = presentTimeNs,
+        .timeDomainId = this->timeDomainId,
+        .presentStageQueries = VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT
+            | VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT
+            | VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT
+            | VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT,
+        .targetTimeDomainPresentStage = this->timingStage
+    };
+    const VkPresentTimingsInfoEXT timingsInfo{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT,
+        .pNext = chain,
+        .swapchainCount = 1,
+        .pTimingInfos = &timingInfo
+    };
+    if (this->presentTimingActive)
+        chain = &timingsInfo;
+
     const VkPresentInfoKHR presentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = chain,
@@ -455,7 +660,10 @@ void MyVkSwapchain::virtual_PresentLinked(const MyVkPresentInfo& original_info,
         const std::scoped_lock<std::mutex> lock2(this->swapchainMutex);
 
         auto res = vk.df().QueuePresentKHR(offload.queue, &presentInfo);
-        if (res != VK_SUCCESS) {
+        if (res == VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT) {
+            // the timing results queue is full; the next drain frees slots. the frame is
+            // still presented, so this is not a fatal present error
+        } else if (res != VK_SUCCESS) {
             this->status.store(res);
 
             if (res != VK_SUBOPTIMAL_KHR)

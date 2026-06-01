@@ -23,7 +23,9 @@ namespace ls {
         /// do not perform any pacing (vsync+novrr)
         None,
         /// space generated frames evenly using the CPU clock
-        CPU
+        CPU,
+        /// schedule presents with VK_EXT_present_timing (the compositor paces)
+        PresentTiming
     };
 
     /// game profile configuration

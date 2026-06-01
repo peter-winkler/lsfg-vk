@@ -21,12 +21,14 @@ namespace {
         switch (pacing) {
             case ls::Pacing::None: return "none";
             case ls::Pacing::CPU:  return "cpu";
+            case ls::Pacing::PresentTiming: return "present-timing";
         }
         return "none";
     }
     std::optional<ls::Pacing> pacingFromString(const std::string& str) {
         if (str == "none") return ls::Pacing::None;
         if (str == "cpu")  return ls::Pacing::CPU;
+        if (str == "present-timing" || str == "present" || str == "gpu") return ls::Pacing::PresentTiming;
         return std::nullopt;
     }
     bool boolFromString(const std::string& str) {
@@ -141,7 +143,7 @@ namespace {
             conf->performance_mode = boolFromString(value);
         } else if (key == "pacing") {
             const auto pacing = pacingFromString(value);
-            if (!pacing.has_value()) { std::cerr << "pacing must be 'none' or 'cpu'\n"; return 1; }
+            if (!pacing.has_value()) { std::cerr << "pacing must be 'none', 'cpu', or 'present-timing'\n"; return 1; }
             conf->pacing = *pacing;
         } else if (key == "gpu") {
             conf->gpu = (value == "default" || value.empty()) ? std::nullopt : std::optional<std::string>(value);
@@ -223,7 +225,7 @@ ACTIONS:
 
 PROFILE KEYS:
     multiplier <float>        target-fps <float>     flow-scale <0.25-1.0>
-    performance-mode <bool>   pacing none|cpu        gpu <name>|default     name <string>
+    performance-mode <bool>   pacing none|cpu|present-timing   gpu <name>|default   name <string>
 )";
     }
 }
