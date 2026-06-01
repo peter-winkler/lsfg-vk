@@ -97,10 +97,12 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
     if (wantPresentTiming)
         info.flags |= VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT
             | VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR;
-    // experiment: force the real swapchain to MAILBOX so timed targets aren't fighting
-    // FIFO's vsync ordering (present-timing only adds value on uncapped present modes)
-    if (wantPresentTiming && std::getenv("LSFGVK_PT_MAILBOX") != nullptr)
-        info.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+    // VK_EXT_present_timing target times only have meaning on FIFO present modes (MAILBOX
+    // and IMMEDIATE ignore them), so when experimental targeting is on, force the real
+    // swapchain to FIFO. With the present-id-correlated lead this is stable; the old crude
+    // lead was what destabilised FIFO, not FIFO itself.
+    if (wantPresentTiming && std::getenv("LSFGVK_PT_EXPERIMENTAL_TARGET") != nullptr)
+        info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
     // create underlying swapchain
     this->handle = createFunc(&info);
