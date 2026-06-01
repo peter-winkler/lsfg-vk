@@ -31,6 +31,8 @@ namespace {
         PFN_vkGetInstanceProcAddr GetInstanceProcAddr; // next layer functions
         PFN_vkGetDeviceProcAddr GetDeviceProcAddr;
         PFN_vkQueueSubmit QueueSubmit;
+        PFN_vkQueueSubmit2 QueueSubmit2{};
+        PFN_vkQueueSubmit2KHR QueueSubmit2KHR{};
 
         // single graphics queue shared between the game and the offload thread;
         // every submit to it must hold sharedQueueMutex (see hooks/device.cpp)
@@ -195,6 +197,10 @@ namespace {
             auto& dev = *layer_info->devices.emplace(
                 *device, std::move(myvk_device)).first->second;
             layer_info->QueueSubmit = dev.funcs().QueueSubmit;
+            layer_info->QueueSubmit2 = reinterpret_cast<PFN_vkQueueSubmit2>(
+                layer_info->GetDeviceProcAddr(*device, "vkQueueSubmit2"));
+            layer_info->QueueSubmit2KHR = reinterpret_cast<PFN_vkQueueSubmit2KHR>(
+                layer_info->GetDeviceProcAddr(*device, "vkQueueSubmit2KHR"));
             layer_info->sharedQueue = dev.offload().queue;
             layer_info->sharedQueueMutex = &dev.offload().mutex;
 
@@ -410,6 +416,28 @@ namespace {
         return layer_info->QueueSubmit(queue, submitCount, pSubmits, fence);
     }
 
+    // same serialization for the vkQueueSubmit2 path (used by DXVK / vkd3d-proton)
+    VkResult submit2Guarded(VkQueue queue, uint32_t submitCount,
+            const VkSubmitInfo2* pSubmits, VkFence fence) {
+        const auto real = layer_info->QueueSubmit2 ? layer_info->QueueSubmit2
+            : layer_info->QueueSubmit2KHR;
+        if (!real)
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+        if (layer_info->sharedQueueMutex && queue == layer_info->sharedQueue) {
+            const std::scoped_lock<std::mutex> lock(*layer_info->sharedQueueMutex);
+            return real(queue, submitCount, pSubmits, fence);
+        }
+        return real(queue, submitCount, pSubmits, fence);
+    }
+    VkResult myvkQueueSubmit2(VkQueue queue, uint32_t submitCount,
+            const VkSubmitInfo2* pSubmits, VkFence fence) {
+        return submit2Guarded(queue, submitCount, pSubmits, fence);
+    }
+    VkResult myvkQueueSubmit2KHR(VkQueue queue, uint32_t submitCount,
+            const VkSubmitInfo2* pSubmits, VkFence fence) {
+        return submit2Guarded(queue, submitCount, pSubmits, fence);
+    }
+
     VkResult myvkQueuePresentKHR(VkQueue queue,
             const VkPresentInfoKHR* info) {
         VkResult result = VK_SUCCESS;
@@ -613,6 +641,8 @@ VkResult vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* pVers
                 { "vkWaitForPresentKHR", VKPTR(myvkWaitForPresentKHR) },
                 { "vkWaitForPresent2KHR", VKPTR(myvkWaitForPresent2KHR) },
                 { "vkQueueSubmit", VKPTR(myvkQueueSubmit) },
+                { "vkQueueSubmit2", VKPTR(myvkQueueSubmit2) },
+                { "vkQueueSubmit2KHR", VKPTR(myvkQueueSubmit2KHR) },
                 { "vkQueuePresentKHR", VKPTR(myvkQueuePresentKHR) },
                 { "vkDestroySwapchainKHR", VKPTR(myvkDestroySwapchainKHR) }
 #undef VKPTR
