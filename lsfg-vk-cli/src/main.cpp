@@ -4,6 +4,7 @@
 #include "tools/config.hpp"
 #include "tools/debug.hpp"
 #include "tools/doctor.hpp"
+#include "tools/run.hpp"
 #include "tools/validate.hpp"
 
 #include <array>
@@ -32,6 +33,7 @@ USAGE:
 COMMANDS:
     config      Manage the configuration (profiles, settings)
     doctor      Diagnose the lsfg-vk setup
+    run         Launch a program with frame generation enabled
     validate    Validate a configuration file
     benchmark   Run a benchmark
     debug       Run lsfg-vk on a set of images
@@ -221,6 +223,11 @@ SUBCOMMAND OPTIONS:
         const std::vector<std::string> args(argv + 1, argv + argc);
         std::exit(doctor::run(args));
     }
+
+    /// parse the run command
+    [[noreturn]] void on_run(int argc, char** argv) {
+        std::exit(run::run(argc, argv));
+    }
 }
 
 int main(int argc, char** argv) {
@@ -234,6 +241,8 @@ int main(int argc, char** argv) {
         on_config(argc - 1, argv + 1);
     else if (command == "doctor")
         on_doctor(argc - 1, argv + 1);
+    else if (command == "run")
+        on_run(argc - 1, argv + 1);
     else if (command == "validate")
         on_validate(argc - 1, argv + 1);
     else if (command == "benchmark")
