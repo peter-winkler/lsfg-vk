@@ -97,6 +97,10 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
     if (wantPresentTiming)
         info.flags |= VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT
             | VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR;
+    // experiment: force the real swapchain to MAILBOX so timed targets aren't fighting
+    // FIFO's vsync ordering (present-timing only adds value on uncapped present modes)
+    if (wantPresentTiming && std::getenv("LSFGVK_PT_MAILBOX") != nullptr)
+        info.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
 
     // create underlying swapchain
     this->handle = createFunc(&info);
@@ -250,6 +254,7 @@ void MyVkSwapchain::drainPresentTiming() noexcept {
         }
         this->prevAchievedPsl = achieved;
         this->lastAchievedPsl = achieved;
+        this->lastAchievedId = timing.presentId;
     }
 }
 
@@ -479,9 +484,14 @@ void MyVkSwapchain::thread_main() noexcept {
             // bootstraps the opaque domain's clock and corrects drift every cycle.
             if (this->presentTimingActive) {
                 this->drainPresentTiming();
-                const uint64_t lead = 4 * stepNs;
-                if (this->lastAchievedPsl != 0 && this->nextPsl < this->lastAchievedPsl + lead)
-                    this->nextPsl = this->lastAchievedPsl + lead;
+                if (this->lastAchievedPsl != 0) {
+                    // project from the most recent *confirmed* present to the next one:
+                    // achieved time + (frames still in flight + 1) steps. Using the present
+                    // id correlation lands targets in the real future instead of the past.
+                    uint64_t inFlight = this->ptPresentId - this->lastAchievedId;
+                    if (inFlight > 16) inFlight = 16; // guard against a stalled feedback queue
+                    this->nextPsl = this->lastAchievedPsl + (inFlight + 1) * stepNs;
+                }
             }
             const auto nextPslTarget = [&]() -> uint64_t {
                 if (!useTargeting || this->nextPsl == 0)
@@ -794,6 +804,21 @@ VkResult MyVkSwapchain::AcquireNextImage2KHR(const VkAcquireNextImageInfoKHR* in
 }
 
 VkResult MyVkSwapchain::partial_QueuePresentKHR(const MyVkPresentInfo& info) noexcept {
+    // test-only: throttle the game's present rate to LSFGVK_BASE_CAP fps, so a fast game
+    // can be held below refresh (where frame generation is actually useful and the
+    // achieved-interval metric is not corrupted by MAILBOX discarding frames)
+    static const uint64_t capUs = [] {
+        const char* cap = std::getenv("LSFGVK_BASE_CAP");
+        const unsigned long long fps = cap ? std::strtoull(cap, nullptr, 10) : 0;
+        return fps != 0 ? 1'000'000ULL / fps : 0ULL;
+    }();
+    if (capUs != 0) {
+        const uint64_t now = nowInUs();
+        if (now < this->baseCapNextUs)
+            sleepUntilUs(this->baseCapNextUs);
+        this->baseCapNextUs = (now > this->baseCapNextUs ? now : this->baseCapNextUs) + capUs;
+    }
+
     MyVkPresentInfo stamped = info;
     stamped.arrivalUs = nowInUs();
     this->presents.emplace(stamped);

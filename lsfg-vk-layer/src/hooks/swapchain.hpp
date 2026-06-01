@@ -128,12 +128,14 @@ namespace lsfgvk::layer {
         VkPresentStageFlagsEXT timingStage{0}; // present stage used for targets + feedback
         uint64_t nextPsl{0};           // next present-stage-local target (ns)
         uint64_t lastAchievedPsl{0};   // latest achieved present time, present-stage-local (ns)
+        uint64_t lastAchievedId{0};    // present id of the latest achieved present (for the lead)
         uint64_t prevAchievedPsl{0};   // previous achieved present time, for jitter stats
         double pacingSum{0.0};         // achieved-interval accumulators, reported every 2s
         double pacingSumSq{0.0};
         uint64_t pacingCount{0};
         uint64_t ptPresentId{0};       // incrementing id to key the timing results queue
         bool ptTargeting{false};       // experimental: drive presents via absolute targets
+        uint64_t baseCapNextUs{0};     // test-only: LSFGVK_BASE_CAP game-rate throttle state
 
         std::vector<vk::Image> images; // virtual swapchain images
         std::mutex availabilityMutex;
