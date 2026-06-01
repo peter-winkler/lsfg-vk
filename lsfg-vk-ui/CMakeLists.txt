@@ -8,12 +8,14 @@ set(UI_SOURCES
 set(UI_RESOURCES
     "rsc/dialogs/CenteredDialog.qml"
     "rsc/dialogs/LargeDialog.qml"
+    "rsc/dialogs/GlobalSheet.qml"
     "rsc/panes/Group.qml"
     "rsc/panes/GroupEntry.qml"
     "rsc/panes/Pane.qml"
     "rsc/widgets/FileEdit.qml"
     "rsc/widgets/FlowSlider.qml"
     "rsc/widgets/List.qml"
+    "rsc/widgets/Segmented.qml"
     "rsc/gay.pancake.lsfg-vk-ui.png"
     "rsc/UI.qml")
 
