@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "tools/benchmark.hpp"
+#include "tools/config.hpp"
 #include "tools/debug.hpp"
 #include "tools/validate.hpp"
 
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <getopt.h> // NOLINT (IWYU)
 #include <bits/getopt_core.h>
@@ -27,6 +29,7 @@ USAGE:
     )" << prog << R"( <COMMAND> [OPTIONS] [ARGS]
 
 COMMANDS:
+    config      Manage the configuration (profiles, settings)
     validate    Validate a configuration file
     benchmark   Run a benchmark
     debug       Run lsfg-vk on a set of images
@@ -204,6 +207,12 @@ SUBCOMMAND OPTIONS:
 
         std::exit(debug::run(opts));
     }
+
+    /// parse the config command
+    [[noreturn]] void on_config(int argc, char** argv) {
+        const std::vector<std::string> args(argv + 1, argv + argc);
+        std::exit(config::run(args));
+    }
 }
 
 int main(int argc, char** argv) {
@@ -213,7 +222,9 @@ int main(int argc, char** argv) {
     }
 
     const std::string command{argv[1]};
-    if (command == "validate")
+    if (command == "config")
+        on_config(argc - 1, argv + 1);
+    else if (command == "validate")
         on_validate(argc - 1, argv + 1);
     else if (command == "benchmark")
         on_benchmark(argc - 1, argv + 1);
