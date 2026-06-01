@@ -140,7 +140,7 @@ int benchmark::run(const Options& opts) {
         const uint64_t end_time = ms() + static_cast<uint64_t>(opts.duration) * 1000ULL;
         while (ms() < end_time) {
             sync.signal(vk, total_frames++);
-            lsfgvk.scheduleFrames(lsfgvk_ctx);
+            lsfgvk.scheduleFrames(lsfgvk_ctx, static_cast<uint64_t>(opts.multiplier - 1));
 
             for (size_t i = 0; i < destimgs.size(); i++) {
                 auto success = sync.wait(vk, total_frames++);

@@ -104,7 +104,7 @@ namespace lsfgvk::backend {
 
         /// schedule frames
         /// (see lsfg-vk documentation)
-        void scheduleFrames();
+        void scheduleFrames(uint64_t frames);
     private:
         std::pair<vk::Image, vk::Image> sourceImages;
         std::vector<vk::Image> destImages;
@@ -549,7 +549,7 @@ ContextImpl::ContextImpl(const InstanceImpl& instance,
     cmdbuf.submit(ctx.vk); // wait for completion
 }
 
-void Instance::scheduleFrames(Context& context) {
+void Instance::scheduleFrames(Context& context, uint64_t frames) {
 #ifdef LSFGVK_TESTING_RENDERDOC
     const auto& impl = this->m_impl;
     if (impl->getRenderDocAPI()) {
@@ -559,7 +559,7 @@ void Instance::scheduleFrames(Context& context) {
     }
 #endif
     try {
-        context.scheduleFrames();
+        context.scheduleFrames(frames);
     } catch (const std::exception& e) {
         throw backend::error("Unable to schedule frames", e);
     }
@@ -573,11 +573,17 @@ void Instance::scheduleFrames(Context& context) {
 #endif
 }
 
-void Context::scheduleFrames() {
+void Context::scheduleFrames(uint64_t frames) {
     // wait for previous pre-pass to complete
     if (this->fidx && !this->cmdbufFence.wait(this->ctx.vk))
         throw backend::error("Timeout waiting for previous frame to complete");
     this->cmdbufFence.reset(this->ctx.vk);
+
+    // rewrite per-frame phases to (i+1)/(frames+1) for fractional multipliers; race-free
+    // here because the cmdbufFence wait above guarantees the prior cycle's reads finished
+    for (uint64_t i = 0; i < frames; i++)
+        this->ctx.constantBuffers.at(i).update(this->ctx.vk,
+            backend::getDefaultConstantBuffer(i, frames, this->ctx.hdr, this->ctx.flow));
 
     // schedule pre-pass
     const auto& cmdbuf = this->cmdbufs.at(0);
@@ -594,13 +600,14 @@ void Context::scheduleFrames() {
     cmdbuf.end(ctx.vk);
     cmdbuf.submit(this->ctx.vk,
         {}, this->syncSemaphore.handle(), this->idx,
-        {}, this->prepassSemaphore.handle(), this->idx
+        {}, this->prepassSemaphore.handle(), this->idx,
+        frames == 0 ? this->cmdbufFence.handle() : VK_NULL_HANDLE
     );
 
     this->idx++;
 
     // schedule main passes
-    for (size_t i = 0; i < this->destImages.size(); i++) {
+    for (size_t i = 0; i < frames; i++) {
         const auto& cmdbuf = this->cmdbufs.at(i + 1);
         cmdbuf.begin(ctx.vk);
 
@@ -619,11 +626,11 @@ void Context::scheduleFrames() {
         cmdbuf.submit(this->ctx.vk,
             {}, this->prepassSemaphore.handle(), this->idx - 1,
             {}, this->syncSemaphore.handle(), this->idx + i,
-            i == this->destImages.size() - 1 ? this->cmdbufFence.handle() : VK_NULL_HANDLE
+            i == frames - 1 ? this->cmdbufFence.handle() : VK_NULL_HANDLE
         );
     }
 
-    this->idx += this->destImages.size();
+    this->idx += frames;
     this->fidx++;
 }
 

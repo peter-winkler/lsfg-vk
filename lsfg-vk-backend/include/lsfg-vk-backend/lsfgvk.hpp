@@ -112,7 +112,7 @@ namespace lsfgvk::backend {
         /// @param context Context to use.
         /// @throws backend::error on failure
         ///
-        void scheduleFrames(Context& context);
+        void scheduleFrames(Context& context, uint64_t frames);
 
         ///
         /// Close a frame generation context

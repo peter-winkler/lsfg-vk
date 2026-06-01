@@ -34,8 +34,8 @@ namespace ls {
         std::vector<std::string> active_in;
         /// gpu to use (in case of multiple)
         std::optional<std::string> gpu;
-        /// multiplier for frame generation
-        size_t multiplier{2};
+        /// frame generation multiplier; fractional values are allowed (e.g. 1.5)
+        float multiplier{2.0F};
         /// non-inverted flow scale
         float flow_scale{1.00F};
         /// use performance mode

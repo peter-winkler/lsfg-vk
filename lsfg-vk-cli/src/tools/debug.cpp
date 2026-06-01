@@ -179,7 +179,7 @@ int debug::run(const Options& opts) {
             );
 
             sync.signal(vk, idx++);
-            lsfgvk.scheduleFrames(lsfgvk_ctx);
+            lsfgvk.scheduleFrames(lsfgvk_ctx, static_cast<uint64_t>(opts.multiplier - 1));
 
             for (size_t i = 0; i < destimgs.size(); i++) {
                 auto success = sync.wait(vk, idx++);

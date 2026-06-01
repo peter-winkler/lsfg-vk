@@ -37,16 +37,19 @@ namespace lsfgvk::layer {
         /// @throws ls::vulkan_error on vulkan errors
         std::pair<VkSemaphore, uint64_t> prepare(vk::CommandBuffer& cmdbuf, VkImage swapchainImage);
 
-        /// schedule frame generation and increment frame index
+        /// schedule generation of `frames` interpolated frames for this cycle
+        /// @param frames number of frames to generate this cycle (0..count())
         /// @throws ls::error on scheduling errors
-        void schedule();
+        void schedule(uint64_t frames);
 
         /// copy a backend destination image into a swapchain image
         /// @param cmdbuf command buffer to record into
         /// @param swapchainImage swapchain image to copy into
+        /// @param frameIndex which generated frame of this cycle to fetch (0-based)
         /// @return timeline pair to wait on for frame generation completion
         /// @throws ls::vulkan_error on vulkan errors
-        std::pair<VkSemaphore, uint64_t> obtain(vk::CommandBuffer& cmdbuf, VkImage swapchainImage);
+        std::pair<VkSemaphore, uint64_t> obtain(vk::CommandBuffer& cmdbuf, VkImage swapchainImage,
+            uint64_t frameIndex);
 
         /// return the amount of generated frames
         /// @return generated frames count
@@ -62,7 +65,6 @@ namespace lsfgvk::layer {
         std::vector<vk::Image> sourceImages;
         std::vector<vk::Image> destinationImages;
         uint64_t frameIdx{0}; // real frames-only
-        uint64_t generatedIdx{0}; // generated frames-only
 
         ls::lazy<vk::TimelineSemaphore> syncSemaphore;
         uint64_t syncValue{1};

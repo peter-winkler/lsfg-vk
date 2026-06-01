@@ -149,7 +149,9 @@ void MyVkSwapchain::thread_main() noexcept {
     const auto& vk = this->device.get().vkd();
     auto& offload = this->device.get().offload();
     auto& gen = this->generator.mut();
-    const uint64_t genCount = gen.count();
+    const uint64_t genCount = gen.count(); // max generated frames per cycle (ceil(R)-1)
+    const double multiplier = this->layer.get().profile().multiplier;
+    double debt{0.0}; // fractional-frame debt accumulator
 
     struct Pass {
         vk::Semaphore acquireSemaphore;
@@ -256,7 +258,7 @@ void MyVkSwapchain::thread_main() noexcept {
     const bool logFps = std::getenv("LSFGVK_DEBUG") != nullptr;
     uint64_t logUs{0}, realFrames{0}, genFrames{0};
     if (logFps)
-        std::cerr << "lsfg-vk: offload thread started (multiplier " << (genCount + 1) << ")\n";
+        std::cerr << "lsfg-vk: offload thread started (multiplier " << multiplier << ")\n";
     bool firstPresent = true;
 
     try {
@@ -293,8 +295,14 @@ void MyVkSwapchain::thread_main() noexcept {
                 pass.copyFence.reset(vk);
             }
 
+            // accumulate fractional debt into an integer generated-frame count this cycle:
+            // multiplier 1.5 yields frames = 0,1,0,1,... averaging 0.5 extra per real frame
+            debt += multiplier - 1.0;
+            const uint64_t frames = static_cast<uint64_t>(debt);
+            debt -= static_cast<double>(frames);
+
             // interpolate between the two most recent sources
-            gen.schedule();
+            gen.schedule(frames);
 
             // update the smoothed game-frame interval from the game-thread timestamp
             if (lastArrivalUs != 0 && ppi->arrivalUs > lastArrivalUs) {
@@ -304,7 +312,7 @@ void MyVkSwapchain::thread_main() noexcept {
             lastArrivalUs = ppi->arrivalUs;
 
             // running present anchor, kept within [now, now + interval] to bound drift
-            const double stepUs = intervalUs / static_cast<double>(genCount + 1);
+            const double stepUs = intervalUs / static_cast<double>(frames + 1);
             const uint64_t now = nowInUs();
             if (nextUs < now || nextUs > now + static_cast<uint64_t>(intervalUs))
                 nextUs = now;
@@ -317,9 +325,9 @@ void MyVkSwapchain::thread_main() noexcept {
             };
 
             // present each generated frame, then the real frame
-            for (uint64_t j = 0; j < genCount; j++)
-                present([&gen](vk::CommandBuffer& cmdbuf, VkImage swapchainImage) {
-                    return gen.obtain(cmdbuf, swapchainImage);
+            for (uint64_t j = 0; j < frames; j++)
+                present([&gen, j](vk::CommandBuffer& cmdbuf, VkImage swapchainImage) {
+                    return gen.obtain(cmdbuf, swapchainImage, j);
                 }, MyVkPresentInfo{}, nextTarget());
 
             present(recordRealFrame(virtualImage.handle()), *ppi, nextTarget());
@@ -330,7 +338,7 @@ void MyVkSwapchain::thread_main() noexcept {
             // periodic framerate report: base game rate vs generated output rate
             if (logFps) {
                 realFrames++;
-                genFrames += genCount;
+                genFrames += frames;
                 const uint64_t t = nowInUs();
                 if (logUs == 0) {
                     logUs = t;

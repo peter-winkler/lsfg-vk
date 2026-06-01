@@ -10,6 +10,7 @@
 #include "lsfg-vk-common/vulkan/command_buffer.hpp"
 #include "lsfg-vk-common/vulkan/image.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -30,7 +31,7 @@ Generator::Generator(MyVkLayer& layer, MyVkDevice& device,
 
     // create shared objects
     std::vector<int> sourceFds(2);
-    std::vector<int> destinationFds(profile.multiplier - 1);
+    std::vector<int> destinationFds(static_cast<size_t>(std::ceil(profile.multiplier)) - 1);
 
     this->sourceImages.reserve(sourceFds.size());
     for (int& fd : sourceFds)
@@ -118,9 +119,9 @@ std::pair<VkSemaphore, uint64_t> Generator::prepare(vk::CommandBuffer& cmdbuf,
     return { this->syncSemaphore->handle(), this->syncValue++ };
 }
 
-void Generator::schedule() {
+void Generator::schedule(uint64_t frames) {
     try {
-        this->instance.get().scheduleFrames(this->ctx.get());
+        this->instance.get().scheduleFrames(this->ctx.get(), frames);
     } catch (const std::exception& e) {
         throw ls::error("failed to schedule frames", e);
     }
@@ -129,8 +130,8 @@ void Generator::schedule() {
 }
 
 std::pair<VkSemaphore, uint64_t> Generator::obtain(vk::CommandBuffer& cmdbuf,
-        VkImage swapchainImage) {
-    const auto& destinationImage = this->destinationImages.at(this->generatedIdx++ % this->destinationImages.size());
+        VkImage swapchainImage, uint64_t frameIndex) {
+    const auto& destinationImage = this->destinationImages.at(frameIndex);
 
     cmdbuf.blitImage(this->vk,
         {

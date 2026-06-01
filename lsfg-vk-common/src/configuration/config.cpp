@@ -67,7 +67,7 @@ ConfigFile::ConfigFile() {
             "vkcube",
             "vkcubepp"
         },
-        .multiplier = 4,
+        .multiplier = 4.0F,
         .flow_scale = 0.85F,
         .performance_mode = true,
         .pacing = Pacing::None
@@ -78,7 +78,7 @@ ConfigFile::ConfigFile() {
             "GenshinImpact.exe"
         },
         .gpu = "NVIDIA GeForce RTX 5080",
-        .multiplier = 2
+        .multiplier = 2.0F
     });
 }
 
@@ -126,13 +126,13 @@ namespace {
             .name = tbl["name"].value_or<std::string>("unnamed"),
             .active_in = activityFromString(tbl["active_in"]),
             .gpu = tbl["gpu"].value<std::string>(),
-            .multiplier = tbl["multiplier"].value_or(2U),
+            .multiplier = tbl["multiplier"].value_or(2.0F),
             .flow_scale = tbl["flow_scale"].value_or(1.0F),
             .performance_mode = tbl["performance_mode"].value_or(false),
             .pacing = parcingFromString(tbl["pacing"].value_or<std::string>("none"))
         };
 
-        if (conf.multiplier <= 1)
+        if (conf.multiplier <= 1.0F)
             throw ls::error("multiplier must be greater than 1");
         if (conf.flow_scale < 0.25F || conf.flow_scale > 1.0F)
             throw ls::error("flow_scale must be between 0.25 and 1.0");
@@ -165,7 +165,7 @@ namespace {
             .active_in = {},
             .gpu = std::nullopt,
 
-            .multiplier = 2,
+            .multiplier = 2.0F,
             .flow_scale = 1.0F,
             .performance_mode = false,
             .pacing = Pacing::None
@@ -174,7 +174,7 @@ namespace {
         const char* gpu = std::getenv("LSFGVK_GPU");
         if (gpu) conf.gpu = std::string(gpu);
         const char* multiplier = std::getenv("LSFGVK_MULTIPLIER");
-        if (multiplier) conf.multiplier = static_cast<size_t>(std::stoul(multiplier));
+        if (multiplier) conf.multiplier = std::stof(multiplier);
         const char* flow_scale = std::getenv("LSFGVK_FLOW_SCALE");
         if (flow_scale) conf.flow_scale = std::stof(flow_scale);
         const char* performance = std::getenv("LSFGVK_PERFORMANCE_MODE");
@@ -182,7 +182,7 @@ namespace {
         const char* pacing = std::getenv("LSFGVK_PACING");
         if (pacing) conf.pacing = parcingFromString(std::string(pacing));
 
-        if (conf.multiplier <= 1)
+        if (conf.multiplier <= 1.0F)
             throw ls::error("multiplier must be greater than 1");
         if (conf.flow_scale < 0.25F || conf.flow_scale > 1.0F)
             throw ls::error("flow_scale must be between 0.25 and 1.0");
@@ -241,7 +241,7 @@ void ConfigFile::write(const std::filesystem::path& path) const {
         }
         if (conf.gpu)
             profile.insert("gpu", conf.gpu.value_or(""));
-        profile.insert("multiplier", static_cast<int64_t>(conf.multiplier));
+        profile.insert("multiplier", static_cast<double>(conf.multiplier));
         profile.insert("flow_scale", conf.flow_scale);
         profile.insert("performance_mode", conf.performance_mode);
         switch (conf.pacing) {
