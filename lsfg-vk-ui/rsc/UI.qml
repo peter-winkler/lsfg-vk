@@ -17,13 +17,15 @@ ApplicationWindow {
 
     // ── Theme: derived live from the GTK palette via SystemPalette ─────────────
     SystemPalette { id: sys; colorGroup: SystemPalette.Active }
-    readonly property color cBg:       sys.window
-    readonly property color cPanel:    Qt.darker(sys.window, 1.10)
-    readonly property color cCard:     Qt.lighter(sys.window, 1.22)
-    readonly property color cText:     sys.windowText
+    // force opaque surfaces: some GTK palettes carry an alpha on window/base, which
+    // would otherwise make the whole window translucent.
+    readonly property color cBg:       Qt.rgba(sys.window.r, sys.window.g, sys.window.b, 1)
+    readonly property color cPanel:    Qt.darker(cBg, 1.10)
+    readonly property color cCard:     Qt.lighter(cBg, 1.22)
+    readonly property color cText:     Qt.rgba(sys.windowText.r, sys.windowText.g, sys.windowText.b, 1)
     readonly property color cSubtext:  Qt.rgba(sys.windowText.r, sys.windowText.g, sys.windowText.b, 0.55)
     readonly property color cBorder:   Qt.rgba(sys.windowText.r, sys.windowText.g, sys.windowText.b, 0.11)
-    readonly property color cAccent:   sys.highlight
+    readonly property color cAccent:   Qt.rgba(sys.highlight.r, sys.highlight.g, sys.highlight.b, 1)
     readonly property color cOnAccent: sys.highlightedText
     readonly property int   rad: 12
     color: cBg
@@ -406,8 +408,8 @@ ApplicationWindow {
                         Row2 {
                             title: "Pacing Mode"
                             subtitle: "How generated frames are spaced for presentation."
-                            ComboBox {
-                                implicitWidth: 160
+                            Segmented {
+                                implicitWidth: 180
                                 model: ["None", "CPU"]
                                 currentIndex: backend.pacing_mode
                                 onActivated: (index) => backend.pacing_mode = index

@@ -8,6 +8,8 @@ Item {
     signal activated(int index)
 
     SystemPalette { id: sys; colorGroup: SystemPalette.Active }
+    readonly property color base: Qt.rgba(sys.window.r, sys.window.g, sys.window.b, 1)
+    readonly property color accent: Qt.rgba(sys.highlight.r, sys.highlight.g, sys.highlight.b, 1)
     readonly property int count: Math.max(1, control.model.length)
 
     implicitHeight: 36
@@ -16,7 +18,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: 9
-        color: Qt.darker(sys.window, 1.12)
+        color: Qt.darker(base, 1.12)
         border.color: Qt.rgba(sys.windowText.r, sys.windowText.g, sys.windowText.b, 0.11)
         border.width: 1
 
@@ -28,7 +30,7 @@ Item {
             x: control.currentIndex * segW + 4
             y: 4
             radius: 6
-            color: sys.highlight
+            color: accent
             Behavior on x { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
         }
 

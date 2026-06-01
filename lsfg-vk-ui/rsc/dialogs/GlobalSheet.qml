@@ -8,9 +8,25 @@ Dialog {
     id: control
     anchors.centerIn: Overlay.overlay
     modal: true
+    dim: true
     width: 540
+    padding: 22
     title: "Global Settings"
     standardButtons: Dialog.Close
+
+    SystemPalette { id: sys; colorGroup: SystemPalette.Active }
+    background: Rectangle {
+        radius: 14
+        color: Qt.lighter(Qt.rgba(sys.window.r, sys.window.g, sys.window.b, 1), 1.16)
+        border.color: Qt.rgba(sys.windowText.r, sys.windowText.g, sys.windowText.b, 0.12)
+        border.width: 1
+    }
+    header: Label {
+        text: control.title
+        color: sys.windowText
+        font.pixelSize: 16; font.bold: true
+        leftPadding: 22; rightPadding: 22; topPadding: 20; bottomPadding: 4
+    }
 
     ColumnLayout {
         anchors.fill: parent
