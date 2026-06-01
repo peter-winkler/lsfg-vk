@@ -2,6 +2,7 @@ set(CLI_SOURCES
     "src/tools/benchmark.cpp"
     "src/tools/config.cpp"
     "src/tools/debug.cpp"
+    "src/tools/doctor.cpp"
     "src/tools/validate.cpp"
     "src/main.cpp")
 
