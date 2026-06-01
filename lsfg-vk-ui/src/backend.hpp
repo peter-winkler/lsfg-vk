@@ -29,7 +29,8 @@ namespace lsfgvk::ui {
         Q_PROPERTY(bool available READ isValidProfileIndex NOTIFY refreshUI)
         Q_PROPERTY(QStringListModel* active_in READ calculateActiveInModel NOTIFY refreshUI)
         Q_PROPERTY(int active_in_index READ getActiveInIndex WRITE activeInSelected NOTIFY refreshUI)
-        Q_PROPERTY(size_t multiplier READ getMultiplier WRITE multiplierUpdated NOTIFY refreshUI)
+        Q_PROPERTY(double multiplier READ getMultiplier WRITE multiplierUpdated NOTIFY refreshUI)
+        Q_PROPERTY(double target_fps READ getTargetFps WRITE targetFpsUpdated NOTIFY refreshUI)
         Q_PROPERTY(float flow_scale READ getFlowScale WRITE flowScaleUpdated NOTIFY refreshUI)
         Q_PROPERTY(bool performance_mode READ getPerformanceMode WRITE performanceModeUpdated NOTIFY refreshUI)
         Q_PROPERTY(int pacing_mode READ getPacingMode WRITE pacingModeUpdated NOTIFY refreshUI)
@@ -70,9 +71,13 @@ namespace lsfgvk::ui {
             return static_cast<int>(this->m_active_in_index);
         }
 
-        [[nodiscard]] size_t getMultiplier() const {
-            VALIDATE_AND_GET_PROFILE(2)
+        [[nodiscard]] double getMultiplier() const {
+            VALIDATE_AND_GET_PROFILE(2.0)
             return conf.multiplier;
+        }
+        [[nodiscard]] double getTargetFps() const {
+            VALIDATE_AND_GET_PROFILE(0.0)
+            return conf.target_fps;
         }
         [[nodiscard]] float getFlowScale() const {
             VALIDATE_AND_GET_PROFILE(1.0F)
@@ -86,6 +91,7 @@ namespace lsfgvk::ui {
             VALIDATE_AND_GET_PROFILE(0)
             switch (conf.pacing) {
                 case ls::Pacing::None: return 0;
+                case ls::Pacing::CPU: return 1;
             }
             throw std::runtime_error("Unknown pacing type in backend");
         }
@@ -133,9 +139,14 @@ namespace lsfgvk::ui {
     if (!isValidProfileIndex()) return; \
     auto& conf = this->m_profiles[static_cast<size_t>(this->m_profile_index)];
 
-        void multiplierUpdated(size_t multiplier) {
+        void multiplierUpdated(double multiplier) {
             VALIDATE_AND_GET_PROFILE()
-            conf.multiplier = multiplier;
+            conf.multiplier = static_cast<float>(multiplier);
+            MARK_DIRTY()
+        }
+        void targetFpsUpdated(double target_fps) {
+            VALIDATE_AND_GET_PROFILE()
+            conf.target_fps = static_cast<float>(target_fps);
             MARK_DIRTY()
         }
         void flowScaleUpdated(float flow_scale) {
@@ -150,10 +161,12 @@ namespace lsfgvk::ui {
         }
         void pacingModeUpdated(int pacing_mode) {
             VALIDATE_AND_GET_PROFILE()
-            if (pacing_mode == 0)
             switch (pacing_mode) {
                 case 0:
                     conf.pacing = ls::Pacing::None;
+                    break;
+                case 1:
+                    conf.pacing = ls::Pacing::CPU;
                     break;
                 default:
                     throw std::runtime_error("Unknown pacing mode in backend");
