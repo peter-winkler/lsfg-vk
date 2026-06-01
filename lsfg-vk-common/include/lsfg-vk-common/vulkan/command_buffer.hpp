@@ -70,6 +70,15 @@ namespace vk {
         void copyBufferToImage(const vk::Vulkan& vk,
             const vk::Buffer& buffer, const vk::Image& image) const;
 
+        /// copy a host buffer into a sub-region of a raw image (must be in TRANSFER_DST)
+        /// @param vk the vulkan instance
+        /// @param buffer the source buffer (tightly packed, w*h pixels)
+        /// @param image the destination image handle
+        /// @param x,y top-left offset in the image
+        /// @param w,h region size
+        void copyBufferToImageRegion(const vk::Vulkan& vk, const vk::Buffer& buffer,
+            VkImage image, int32_t x, int32_t y, uint32_t w, uint32_t h) const;
+
         /// end recording commands
         /// @param vk the vulkan instance
         /// @throws ls::vulkan_error on failure

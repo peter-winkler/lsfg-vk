@@ -126,6 +126,10 @@ MyVkSwapchain::MyVkSwapchain(MyVkLayer& layer, MyVkInstance& instance, MyVkDevic
 
     // create the frame generation driver, then the offload thread that drives it
     this->generator.emplace(layer, device, info.imageExtent, info.imageFormat);
+    if (std::getenv("LSFGVK_OVERLAY") != nullptr) {
+        this->overlay.emplace(vk, info.imageFormat);
+        this->overlayActive = true;
+    }
 
     this->doneSemaphore.emplace(vk, 0);
     this->thread = std::thread(&MyVkSwapchain::thread_main, this);
@@ -324,6 +328,8 @@ void MyVkSwapchain::thread_main() noexcept {
         auto& cmdbuf = pass.commandBuffer;
         cmdbuf.begin(vk);
         const auto [waitSem, waitVal] = recordBlit(cmdbuf, swapchainImage);
+        if (this->overlayActive)
+            this->overlay->draw(vk, cmdbuf, swapchainImage);
         cmdbuf.end(vk);
 
         {
@@ -406,6 +412,7 @@ void MyVkSwapchain::thread_main() noexcept {
         std::cerr << "lsfg-vk: offload thread started (max multiplier " << multiplier
             << (targetFps > 0.0 ? ", adaptive)\n" : ")\n");
     bool firstPresent = true;
+    uint64_t prepSum{0}, schedSum{0}, presSum{0}, cycN{0}; // offload-pipeline breakdown (debug)
 
     try {
         uint64_t counter{1};
@@ -421,6 +428,7 @@ void MyVkSwapchain::thread_main() noexcept {
             }
 
             auto& virtualImage = this->images.at(ppi->idx);
+            const uint64_t cyc0 = nowInUs();
 
             // load the freshly rendered frame as a generation source
             {
@@ -440,6 +448,7 @@ void MyVkSwapchain::thread_main() noexcept {
                     throw ls::error("virtual swapchain prepare fence wait timed out");
                 pass.copyFence.reset(vk);
             }
+            const uint64_t cyc1 = nowInUs();
 
             // update the smoothed game-frame interval from the game-thread timestamp
             if (lastArrivalUs != 0 && ppi->arrivalUs > lastArrivalUs) {
@@ -465,6 +474,7 @@ void MyVkSwapchain::thread_main() noexcept {
 
             // interpolate between the two most recent sources
             gen.schedule(frames);
+            const uint64_t cyc2 = nowInUs();
 
             // running present anchor, kept within [now, now + interval] to bound drift
             const double stepUs = intervalUs / static_cast<double>(frames + 1);
@@ -511,12 +521,15 @@ void MyVkSwapchain::thread_main() noexcept {
 
             present(recordRealFrame(virtualImage.handle()), *ppi,
                 pace ? nextSchedule() : 0, nextPslTarget());
+            const uint64_t cyc3 = nowInUs();
+            prepSum += cyc1 - cyc0; schedSum += cyc2 - cyc1; presSum += cyc3 - cyc2; cycN++;
 
             // mark the virtual image as available again
             this->virtual_CompleteUPresent(*ppi);
 
-            // periodic framerate report: base game rate vs generated output rate
-            if (logFps) {
+            // periodic report: base rate vs generated output rate + pipeline breakdown,
+            // feeding both the stderr log (LSFGVK_DEBUG) and the overlay (LSFGVK_OVERLAY)
+            if (logFps || this->overlayActive) {
                 realFrames++;
                 genFrames += frames;
                 const uint64_t t = nowInUs();
@@ -524,21 +537,32 @@ void MyVkSwapchain::thread_main() noexcept {
                     logUs = t;
                 } else if (t - logUs >= 2'000'000) {
                     const double secs = static_cast<double>(t - logUs) / 1'000'000.0;
-                    std::cerr << "lsfg-vk: base "
-                        << static_cast<uint64_t>(realFrames / secs) << " fps -> output "
-                        << static_cast<uint64_t>((realFrames + genFrames) / secs) << " fps\n";
-                    if (this->presentTimingActive && this->pacingCount > 1) {
-                        const double n = static_cast<double>(this->pacingCount);
-                        const double mean = this->pacingSum / n;
-                        const double var = this->pacingSumSq / n - mean * mean;
-                        std::cerr << "lsfg-vk: present-timing achieved interval "
-                            << static_cast<uint64_t>(mean / 1000.0) << " us (jitter "
-                            << static_cast<uint64_t>(std::sqrt(var > 0.0 ? var : 0.0) / 1000.0)
-                            << " us, n=" << this->pacingCount << ")\n";
-                        this->pacingSum = 0.0;
-                        this->pacingSumSq = 0.0;
-                        this->pacingCount = 0;
+                    const auto baseFps = static_cast<uint32_t>(realFrames / secs);
+                    const auto outFps = static_cast<uint32_t>((realFrames + genFrames) / secs);
+                    const uint32_t prepUs = cycN ? static_cast<uint32_t>(prepSum / cycN) : 0;
+                    const uint32_t genUs = cycN ? static_cast<uint32_t>(schedSum / cycN) : 0;
+                    const uint32_t presUs = cycN ? static_cast<uint32_t>(presSum / cycN) : 0;
+                    if (logFps) {
+                        std::cerr << "lsfg-vk: base " << baseFps << " fps -> output "
+                            << outFps << " fps\n";
+                        if (this->presentTimingActive && this->pacingCount > 1) {
+                            const double n = static_cast<double>(this->pacingCount);
+                            const double mean = this->pacingSum / n;
+                            const double var = this->pacingSumSq / n - mean * mean;
+                            std::cerr << "lsfg-vk: present-timing achieved interval "
+                                << static_cast<uint64_t>(mean / 1000.0) << " us (jitter "
+                                << static_cast<uint64_t>(std::sqrt(var > 0.0 ? var : 0.0) / 1000.0)
+                                << " us, n=" << this->pacingCount << ")\n";
+                            this->pacingSum = 0.0;
+                            this->pacingSumSq = 0.0;
+                            this->pacingCount = 0;
+                        }
+                        std::cerr << "lsfg-vk: offload/cycle prepare " << prepUs
+                            << "us schedule " << genUs << "us present " << presUs << "us\n";
                     }
+                    if (this->overlayActive)
+                        this->overlay.mut().update(vk, baseFps, outFps, prepUs, genUs, presUs);
+                    prepSum = schedSum = presSum = cycN = 0;
                     logUs = t;
                     realFrames = 0;
                     genFrames = 0;

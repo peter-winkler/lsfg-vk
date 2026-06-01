@@ -193,6 +193,24 @@ void CommandBuffer::copyBufferToImage(const vk::Vulkan& vk,
     );
 }
 
+void CommandBuffer::copyBufferToImageRegion(const vk::Vulkan& vk, const vk::Buffer& buffer,
+        VkImage image, int32_t x, int32_t y, uint32_t w, uint32_t h) const {
+    const VkBufferImageCopy region{
+        .bufferRowLength = w,
+        .bufferImageHeight = h,
+        .imageSubresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .layerCount = 1
+        },
+        .imageOffset = { x, y, 0 },
+        .imageExtent = { w, h, 1 }
+    };
+    vk.df().CmdCopyBufferToImage(*this->commandBuffer,
+        buffer.handle(), image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region
+    );
+}
+
 void CommandBuffer::end(const vk::Vulkan& vk) const {
     auto res = vk.df().EndCommandBuffer(*this->commandBuffer);
     if (res != VK_SUCCESS)

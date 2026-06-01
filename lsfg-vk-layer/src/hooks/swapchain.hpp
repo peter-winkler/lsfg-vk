@@ -5,6 +5,7 @@
 #include "device.hpp"
 #include "instance.hpp"
 #include "../generator.hpp"
+#include "../overlay.hpp"
 #include "lsfg-vk-common/helpers/pointers.hpp"
 #include "lsfg-vk-common/vulkan/image.hpp"
 #include "lsfg-vk-common/vulkan/semaphore.hpp"
@@ -114,6 +115,9 @@ namespace lsfgvk::layer {
         ls::R<MyVkDevice> device;
 
         ls::lazy<Generator> generator; // frame generation driver, runs on the offload thread
+
+        ls::lazy<Overlay> overlay;     // debug statistics overlay (LSFGVK_OVERLAY)
+        bool overlayActive{false};
 
         vk::TimelineSemaphore presentSemaphore;
         uint64_t presentIndex;
